@@ -9,6 +9,19 @@ SpoolSense Scanner is an ESP32-based NFC scanner designed for managing 3D printe
 
 The scanner allows users to tap a filament spool to identify it, retrieve metadata from the NFC tag, and trigger external automation or spool tracking workflows. A built-in web UI at `spoolsense.local` provides tag reading, writing, device configuration, and over-the-air firmware updates — no apps or external tools required.
 
+## Documentation
+
+Full setup guides, hardware wiring, printer compatibility, and deeper integration walkthroughs live on **[spoolsense.org](https://spoolsense.org)**:
+
+- [What is SpoolSense](https://spoolsense.org/intro/) — start here
+- [Web Flasher](https://spoolsense.org/installation/web-flasher/) — flash from your browser, no installs
+- [Printer Compatibility](https://spoolsense.org/resources/compatibility/) — Klipper, AFC, Toolchanger, Snapmaker U1, Prusa, Creality
+- [Snapmaker U1 Integration](https://spoolsense.org/installation/snapmaker-u1/)
+- [Bambu Lab AMS Integration](https://spoolsense.org/installation/bambu-ams/)
+- [Tag Formats Reference](https://spoolsense.org/resources/tag-formats/)
+
+This README is a high-level overview. For setup, troubleshooting, and full integration guides, head to the docs site.
+
 ## Web UI
 
 After connecting to WiFi, open **`http://spoolsense.local`** from any browser on your local network. The landing page provides access to all tools:
@@ -29,7 +42,7 @@ After connecting to WiFi, open **`http://spoolsense.local`** from any browser on
 
 ## Features
 
-* **Multi-format NFC Support:** Read and write OpenPrintTag (ISO15693), TigerTag (ISO14443A NTAG213/215), OpenTag3D (ISO14443A NTAG215/216), and OpenSpool (ISO14443A NTAG215/216) tags. NFC+ (UID-only) tags and Bambu Lab tags are also detected for Spoolman registration.
+* **Multi-format NFC Support:** Read and write OpenPrintTag (ISO15693), TigerTag (ISO14443A NTAG213/215), OpenTag3D (ISO14443A NTAG215/216), and OpenSpool (ISO14443A NTAG215/216) tags. Bambu Lab MIFARE Classic tags are read with full decryption (vendor, material, color, weight, temperatures, dry info). NFC+ (UID-only) tags are detected for Spoolman registration by UID.
 * **Dual NFC Reader Support:** PN5180 (ISO15693 + ISO14443A, all tag formats) and PN532 (ISO14443A only). Selected at runtime via NVS — both compiled into a single binary.
 * **3x4 Matrix Keypad (optional):** Scan a spool, type a tool number, press # to assign via Moonraker's ASSIGN_SPOOL macro. For toolchanger and multi-tool setups.
 * **Built-in Tag Writer:** Write filament metadata directly from the web UI — material, manufacturer, weight, color, density, diameter, temperatures, and more. Separate writer pages for each tag format. Material and brand fields are type-to-search with auto-fill for temperatures and density. A Read button on each writer page loads an existing tag's data for re-writing.
@@ -42,7 +55,8 @@ After connecting to WiFi, open **`http://spoolsense.local`** from any browser on
 * **Automatic Spoolman Registration:** When a tagged spool is scanned, the scanner automatically creates or updates the spool entry in Spoolman — no manual data entry needed. If a tag is re-written with different filament, the old spool is automatically archived and a new one created. Requires the `nfc_id` extra field in Spoolman (the [installer](https://github.com/SpoolSense/spoolsense-installer) can create this for you).
 * **Device ID on Landing Page:** The scanner's unique device ID is displayed prominently on the home page for easy middleware configuration.
 * **PrusaLink Integration (Experimental):** Automatic print monitoring and filament tracking for Prusa printers via PrusaLink API. Pre-print filament mismatch and temperature warnings. Multi-tool XL support. Enable via web config at `spoolsense.local/config`. **Looking for testers — if you have a Prusa printer, please try it and report issues.**
-* **TFT Display (optional):** ST7789 240x240 color display with filament color swatch, tag format labels, and spool info. Alternative to the 16x2 LCD.
+* **Snapmaker U1 Direct-Mode Integration:** Push spool data directly to a Snapmaker U1 toolchanger via the extended firmware's external filament-detection API. All six tag formats supported. One scanner per toolhead channel; multi-scanner setups supported. Requires paxx12 Extended Firmware. [Setup guide →](https://spoolsense.org/installation/snapmaker-u1/)
+* **TFT Display (optional):** ST7789 240×240 (square) or GC9A01 (round) color display with filament color swatch, tag format labels, and spool info. Driver selectable at runtime via web config. Alternative to the 16x2 LCD.
 * **LCD Display (optional):** 16x2 I2C LCD for device status, NFC scan results, and system information.
 * **Status LED:** Visual feedback for boot, WiFi, tag detection, write progress, and filament color display.
 
@@ -54,7 +68,7 @@ After connecting to WiFi, open **`http://spoolsense.local`** from any browser on
 | TigerTag | ISO14443A (NTAG213/215) | Full read/write — binary format with material, brand, color, weight, temperatures |
 | OpenTag3D | ISO14443A (NTAG215/216) | Full read/write — NDEF binary format with material, color, weight, density, temperatures, extended fields |
 | OpenSpool | ISO14443A (NTAG215/216) | Full read/write — NDEF JSON format with brand, material, color, nozzle temperatures |
-| Bambu Lab | ISO14443A (MIFARE Classic) | UID detection only (encrypted, no data access) |
+| Bambu Lab | ISO14443A (MIFARE Classic) | Full read — HKDF-derived MIFARE Classic keys decrypt material, vendor, color, weight, temperatures, dry temp/time |
 | UID-only (NTAG215, etc.) | ISO14443A | UID detected and published; middleware looks up spool by UID |
 
 - OpenPrintTag spec: [openprinttag.org](https://openprinttag.org/generator/)
@@ -111,6 +125,10 @@ Once the scanner is running, open **`http://spoolsense.local`** in your browser.
 *   ESP32 (one of):
     - **ESP32-WROOM** — [Freenove ESP32-WROOM](https://www.amazon.com/dp/B0C9THDPXP) (tested). Recommended if using LCD + keypad.
     - **ESP32-S3-Zero / S3-Zero-M** — Smaller form factor with onboard WS2812 RGB LED. M variant has pre-soldered pin headers.
+    - **ESP32-S3-DevKitC-1-N16R8** — Larger flash + PSRAM, separate SPI buses for PN5180 and TFT.
+    - **ESP32-C3 SuperMini** — Smallest variant. NFC reader + LCD + LED only (no TFT/keypad).
+
+    See [spoolsense.org/getting-started/choose-board](https://spoolsense.org/getting-started/choose-board/) for trade-offs and recommendations.
 *   USB-C cable
 *   Jumper wires: female-to-female Dupont wires (8 minimum, more if adding extras)
 *   LCD Screen: [16x2 I2C LCD](https://a.co/d/dryhwvd) (optional)
