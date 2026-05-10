@@ -1,5 +1,13 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- **Prusa MK4 / MMU3 HA blueprints** — two Home Assistant blueprints (`spoolsense_prusa_binding.yaml` + `spoolsense_prusa_lifecycle.yaml`) implementing per-slot Prusa spool tracking via HA orchestration. Default model is one scanner per slot (5 for MMU3). Pre-print material check uses bidirectional substring match; post-print deduction publishes per-tool grams via `cmd/deduct/<UID>` MQTT (reuses v1.6.14 path). Cancel proration by last-known progress %. PrusaLink local API has no slot-binding writes, so HA orchestration is the only path. Setup guide at [spoolsense.org/installation/prusa](https://spoolsense.org/installation/prusa/). Untested on real Prusa hardware. (#187, #195)
+
+---
+
 ## [1.7.5] - 2026-04-29
 
 ### Added
