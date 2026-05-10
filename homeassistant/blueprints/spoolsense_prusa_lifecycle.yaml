@@ -132,6 +132,14 @@ actions:
       scanner_id: !input scanner_device_id
       action_choice: !input mismatch_action
       pause_btn: !input pause_button
+
+  - action: homeassistant.update_entity
+    target:
+      entity_id: "{{ meta_sensor }}"
+  - delay:
+      seconds: 3
+
+  - variables:
       meta: "{{ state_attr(meta_sensor, 'meta') | default({}, true) }}"
       gcode_types_array: "{{ meta.get('filament_type per tool', []) }}"
       gcode_type_single: "{{ meta.get('filament_type', '') }}"
@@ -155,14 +163,16 @@ actions:
               mismatches: >
                 {% set ns = namespace(out=[]) %}
                 {% for gcode_type in types_list %}
-                  {% set gtype = (gcode_type | string).split(' ')[-1] | upper %}
+                  {% set gtype = (gcode_type | string) | upper %}
                   {% if loop.index0 < slots | length %}
                     {% set helper_state = states(slots[loop.index0]) %}
                     {% if helper_state and helper_state not in ['unknown','unavailable',''] %}
                       {% set bound = helper_state | from_json(default={}) %}
                       {% set bound_mat = (bound.mat | default('') | upper) %}
-                      {% if bound_mat and gtype and bound_mat != gtype %}
-                        {% set ns.out = ns.out + [{'tool': loop.index0, 'gcode': gtype, 'bound': bound_mat}] %}
+                      {% if bound_mat and gtype %}
+                        {% if (gtype not in bound_mat) and (bound_mat not in gtype) %}
+                          {% set ns.out = ns.out + [{'tool': loop.index0, 'gcode': gtype, 'bound': bound_mat}] %}
+                        {% endif %}
                       {% endif %}
                     {% endif %}
                   {% endif %}

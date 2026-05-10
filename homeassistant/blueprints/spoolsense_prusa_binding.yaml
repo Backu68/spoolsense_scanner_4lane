@@ -65,8 +65,7 @@ actions:
   - variables:
       uid: "{{ trigger.to_state.attributes.uid | default('') }}"
       spoolman_id: "{{ trigger.to_state.attributes.spoolman_id | default(-1) }}"
-      material_raw: "{{ trigger.to_state.attributes.material_type | default('') }}"
-      material: "{{ material_raw.split(' ')[-1] | upper if material_raw else '' }}"
+      material: "{{ trigger.to_state.attributes.material_type | default('') | upper }}"
       color: "{{ trigger.to_state.attributes.color | default('') }}"
       label: !input slot_label
       notify: !input notify_on_bind
