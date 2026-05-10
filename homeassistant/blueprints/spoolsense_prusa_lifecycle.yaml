@@ -1,0 +1,272 @@
+blueprint:
+  name: "SpoolSense → Prusa Print Lifecycle"
+  description: >
+    Pre-print material check + post-print Spoolman deduction for Prusa printers
+    (MK4 single extruder or MMU3 multi-color). One instance per printer; covers
+    all configured slots.
+
+    On state → printing: compares the gcode's per-tool material strings against
+    the spool bound to each slot. On mismatch, sends an HA notification (and
+    optionally pauses the print).
+
+    On state → finished: reads slicer-estimated grams used per tool from gcode
+    metadata and publishes deductions to the SpoolSense scanner via MQTT
+    (cmd/deduct/<UID>). Scanner handles Spoolman PATCH and writable-tag NVS
+    deferral.
+
+    On state → stopped (canceled): prorates the deduction by the last known
+    progress %. If the progress sensor is unavailable at cancel time,
+    deduction defaults to 0g.
+
+    Hard caveats:
+    - Deduction is the slicer's pre-print estimate, not measured usage.
+      Drift accumulates over many prints.
+    - PrusaLink reports nothing about which spool is physically loaded in
+      which slot. Bindings are user-asserted.
+    - Material mismatch checking is string-based and not bulletproof. Default
+      mismatch action is "notify only" — opt into "pause" only after you've
+      validated your slicer profiles match Spoolman material names.
+
+    Required prereq: a REST sensor in configuration.yaml polling
+    /api/v1/job and exposing file.meta as an attribute. See setup doc.
+  domain: automation
+  input:
+    prusa_state_sensor:
+      name: PrusaLink State Sensor
+      description: >
+        The PrusaLink integration's printer state sensor
+        (e.g., sensor.prusa_mk4_printer). Lowercase states like "printing",
+        "finished", "stopped".
+      selector:
+        entity:
+          filter:
+            - domain: sensor
+    prusa_progress_sensor:
+      name: PrusaLink Progress Sensor
+      description: >
+        The PrusaLink integration's job progress sensor
+        (e.g., sensor.prusa_mk4_progress). Used for cancel proration.
+      selector:
+        entity:
+          filter:
+            - domain: sensor
+    prusa_job_meta_sensor:
+      name: Prusa Job Meta REST Sensor
+      description: >
+        Your manually-configured REST sensor that polls /api/v1/job and
+        exposes file.meta as an attribute. The HA prusalink integration
+        does not expose this on its own. See setup doc for the YAML.
+      selector:
+        entity:
+          filter:
+            - domain: sensor
+    slot_helpers:
+      name: Slot Helpers (in slot order)
+      description: >
+        Select the slot helpers in physical slot order. Position 0 is
+        slot 0, position 1 is slot 1, etc. For MK4 select just the single
+        slot helper. For MMU3 select all 5 in order.
+      selector:
+        entity:
+          multiple: true
+          filter:
+            - domain: input_text
+    scanner_device_id:
+      name: SpoolSense Scanner Device ID
+      description: >
+        Any one of your scanner device IDs (e.g., 4d9620). Used as the
+        MQTT topic prefix for cmd/deduct messages. The deduction message
+        carries the spool UID, so the scanner resolves the spool itself —
+        the scanner ID just routes the message.
+      selector:
+        text: {}
+    mismatch_action:
+      name: Material Mismatch Action
+      description: >
+        What to do when the gcode's expected material doesn't match the
+        spool bound to that slot. "Notify only" is recommended unless your
+        slicer profiles and Spoolman material names are perfectly aligned —
+        false positives will pause good prints.
+      default: notify
+      selector:
+        select:
+          options:
+            - label: "Notify only (recommended)"
+              value: notify
+            - label: "Notify + pause the print"
+              value: notify_pause
+    pause_button:
+      name: PrusaLink Pause Button (optional)
+      description: >
+        Required only if Mismatch Action is "Notify + pause". Select the
+        PrusaLink integration's Pause button entity for this printer
+        (e.g., button.prusa_mk4_pause_job).
+      default: ""
+      selector:
+        entity:
+          filter:
+            - domain: button
+
+mode: single
+max_exceeded: silent
+
+triggers:
+  - trigger: state
+    entity_id: !input prusa_state_sensor
+    to: "printing"
+    id: pre_check
+  - trigger: state
+    entity_id: !input prusa_state_sensor
+    to: "finished"
+    id: deduct_full
+  - trigger: state
+    entity_id: !input prusa_state_sensor
+    to: "stopped"
+    id: deduct_prorated
+
+actions:
+  - variables:
+      meta_sensor: !input prusa_job_meta_sensor
+      progress_sensor: !input prusa_progress_sensor
+      slots: !input slot_helpers
+      scanner_id: !input scanner_device_id
+      action_choice: !input mismatch_action
+      pause_btn: !input pause_button
+      meta: "{{ state_attr(meta_sensor, 'meta') | default({}, true) }}"
+      gcode_types_array: "{{ meta.get('filament_type per tool', []) }}"
+      gcode_type_single: "{{ meta.get('filament_type', '') }}"
+      gcode_grams_array: "{{ meta.get('filament used [g] per tool', []) }}"
+      gcode_grams_single: "{{ meta.get('filament used [g]', 0) | float(0) }}"
+
+  - choose:
+      - conditions:
+          - condition: trigger
+            id: pre_check
+        sequence:
+          - variables:
+              types_list: >
+                {% if gcode_types_array %}
+                  {{ gcode_types_array }}
+                {% elif gcode_type_single %}
+                  {{ [gcode_type_single] }}
+                {% else %}
+                  {{ [] }}
+                {% endif %}
+              mismatches: >
+                {% set ns = namespace(out=[]) %}
+                {% for gcode_type in types_list %}
+                  {% set gtype = (gcode_type | string).split(' ')[-1] | upper %}
+                  {% if loop.index0 < slots | length %}
+                    {% set helper_state = states(slots[loop.index0]) %}
+                    {% if helper_state and helper_state not in ['unknown','unavailable',''] %}
+                      {% set bound = helper_state | from_json(default={}) %}
+                      {% set bound_mat = (bound.mat | default('') | upper) %}
+                      {% if bound_mat and gtype and bound_mat != gtype %}
+                        {% set ns.out = ns.out + [{'tool': loop.index0, 'gcode': gtype, 'bound': bound_mat}] %}
+                      {% endif %}
+                    {% endif %}
+                  {% endif %}
+                {% endfor %}
+                {{ ns.out }}
+          - if:
+              - condition: template
+                value_template: "{{ mismatches | length > 0 }}"
+            then:
+              - action: persistent_notification.create
+                data:
+                  title: "SpoolSense → Prusa: material mismatch"
+                  message: >
+                    {% for m in mismatches %}
+                    Tool {{ m.tool }}: gcode wants {{ m.gcode }}, slot has {{ m.bound }}.
+                    {% endfor %}
+                  notification_id: "spoolsense_prusa_mismatch"
+              - if:
+                  - condition: template
+                    value_template: "{{ action_choice == 'notify_pause' and pause_btn != '' }}"
+                then:
+                  - action: button.press
+                    target:
+                      entity_id: "{{ pause_btn }}"
+
+      - conditions:
+          - condition: trigger
+            id: deduct_full
+        sequence:
+          - variables:
+              grams_list: >
+                {% if gcode_grams_array %}
+                  {{ gcode_grams_array }}
+                {% else %}
+                  {{ [gcode_grams_single] }}
+                {% endif %}
+              factor: 1.0
+          - repeat:
+              for_each: "{{ grams_list }}"
+              sequence:
+                - variables:
+                    tool_index: "{{ repeat.index | int - 1 }}"
+                    grams_used: "{{ (repeat.item | float(0)) * factor }}"
+                - condition: template
+                  value_template: "{{ grams_used > 0 and tool_index < slots | length }}"
+                - variables:
+                    helper_state: "{{ states(slots[tool_index]) }}"
+                - condition: template
+                  value_template: "{{ helper_state not in ['unknown','unavailable',''] }}"
+                - variables:
+                    bound: "{{ helper_state | from_json(default={}) }}"
+                    uid: "{{ bound.uid | default('') }}"
+                - condition: template
+                  value_template: "{{ uid != '' }}"
+                - action: mqtt.publish
+                  data:
+                    topic: "spoolsense/{{ scanner_id }}/cmd/deduct/{{ uid }}"
+                    payload: '{"deduct_g": {{ grams_used | round(2) }}}'
+
+      - conditions:
+          - condition: trigger
+            id: deduct_prorated
+        sequence:
+          - variables:
+              progress_raw: "{{ states(progress_sensor) }}"
+              progress_pct: >
+                {% set v = progress_raw | float(-1) %}
+                {{ v if v >= 0 else 0 }}
+              factor: "{{ (progress_pct | float(0)) / 100.0 }}"
+              grams_list: >
+                {% if gcode_grams_array %}
+                  {{ gcode_grams_array }}
+                {% else %}
+                  {{ [gcode_grams_single] }}
+                {% endif %}
+          - action: persistent_notification.create
+            data:
+              title: "SpoolSense → Prusa: print canceled"
+              message: >
+                Print canceled at {{ progress_pct | round(1) }}% progress.
+                Deducting prorated estimate. Adjust Spoolman manually if needed.
+              notification_id: "spoolsense_prusa_cancel"
+          - if:
+              - condition: template
+                value_template: "{{ factor | float(0) > 0 }}"
+            then:
+              - repeat:
+                  for_each: "{{ grams_list }}"
+                  sequence:
+                    - variables:
+                        tool_index: "{{ repeat.index | int - 1 }}"
+                        grams_used: "{{ (repeat.item | float(0)) * (factor | float(0)) }}"
+                    - condition: template
+                      value_template: "{{ grams_used > 0 and tool_index < slots | length }}"
+                    - variables:
+                        helper_state: "{{ states(slots[tool_index]) }}"
+                    - condition: template
+                      value_template: "{{ helper_state not in ['unknown','unavailable',''] }}"
+                    - variables:
+                        bound: "{{ helper_state | from_json(default={}) }}"
+                        uid: "{{ bound.uid | default('') }}"
+                    - condition: template
+                      value_template: "{{ uid != '' }}"
+                    - action: mqtt.publish
+                      data:
+                        topic: "spoolsense/{{ scanner_id }}/cmd/deduct/{{ uid }}"
+                        payload: '{"deduct_g": {{ grams_used | round(2) }}}'

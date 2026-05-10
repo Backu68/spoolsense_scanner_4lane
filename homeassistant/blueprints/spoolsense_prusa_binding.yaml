@@ -1,0 +1,94 @@
+blueprint:
+  name: "SpoolSense → Prusa Slot Binding"
+  description: >
+    Bind a SpoolSense scanner to a single Prusa MMU3 slot (or the single MK4 extruder).
+    When the configured scanner publishes a spool present event, the spool's UID,
+    Spoolman ID, and material are written to a slot helper that the SpoolSense → Prusa
+    Lifecycle blueprint reads from on print start and finish.
+
+    Default model: one scanner per slot. Install this blueprint once per slot you want
+    to track (1× for MK4, 5× for MMU3), each instance configured with one scanner's
+    spool sensor and one slot helper.
+
+    Hard caveats:
+    - There is no printer-side signal for "spool was loaded into slot N." If the user
+      scans one spool but physically loads a different one, the system has no way to
+      detect the discrepancy.
+    - PrusaLink local API has no write endpoint for slot/material binding. The Prusa
+      LCD will not reflect the scanned spool.
+  domain: automation
+  input:
+    spoolsense_sensor:
+      name: SpoolSense Spool Sensor
+      description: >
+        The spool sensor entity from the scanner mounted at this slot
+        (e.g., sensor.spoolsense_4d9620_spool).
+      selector:
+        entity:
+          filter:
+            - domain: sensor
+    slot_helper:
+      name: Slot Helper
+      description: >
+        The input_text helper for this slot (e.g., input_text.prusa_slot_2).
+        Must allow at least 100 characters. Stores compact JSON:
+        {"uid":"...","sid":N,"mat":"...","color":"..."}.
+      selector:
+        entity:
+          filter:
+            - domain: input_text
+    slot_label:
+      name: Slot Label (optional)
+      description: >
+        Human-readable label for notifications (e.g., "MMU3 Slot 2", "MK4").
+        Used only in the optional notification.
+      default: ""
+      selector:
+        text: {}
+    notify_on_bind:
+      name: Notify on Bind
+      description: >
+        Send an HA notification when a spool is bound to this slot.
+      default: false
+      selector:
+        boolean: {}
+
+mode: single
+max_exceeded: silent
+
+triggers:
+  - trigger: state
+    entity_id: !input spoolsense_sensor
+    to: "present"
+
+actions:
+  - variables:
+      uid: "{{ trigger.to_state.attributes.uid | default('') }}"
+      spoolman_id: "{{ trigger.to_state.attributes.spoolman_id | default(-1) }}"
+      material_raw: "{{ trigger.to_state.attributes.material_type | default('') }}"
+      material: "{{ material_raw.split(' ')[-1] | upper if material_raw else '' }}"
+      color: "{{ trigger.to_state.attributes.color | default('') }}"
+      label: !input slot_label
+      notify: !input notify_on_bind
+
+  - condition: template
+    value_template: "{{ uid != '' }}"
+
+  - action: input_text.set_value
+    target:
+      entity_id: !input slot_helper
+    data:
+      value: >
+        {"uid":"{{ uid }}","sid":{{ spoolman_id }},"mat":"{{ material }}","color":"{{ color }}"}
+
+  - if:
+      - condition: template
+        value_template: "{{ notify }}"
+    then:
+      - action: persistent_notification.create
+        data:
+          title: "SpoolSense → Prusa"
+          message: >
+            Bound {{ material if material else 'spool' }}{% if label %} to {{ label }}{% endif %}
+            (UID {{ uid }}{% if spoolman_id|int(-1) >= 0 %}, Spoolman #{{ spoolman_id }}{% endif %}).
+          notification_id: "spoolsense_prusa_bind_{{ uid }}"
