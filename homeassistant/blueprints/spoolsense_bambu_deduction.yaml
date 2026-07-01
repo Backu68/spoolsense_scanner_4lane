@@ -69,7 +69,7 @@ actions:
       sequence:
         - variables:
             tray_entity: "{{ repeat.item }}"
-            tray_index: "{{ loop.index0 }}"
+            tray_index: "{{ repeat.index - 1 }}"
             ams_num: "{{ (tray_index | int // 4) + 1 }}"
             tray_in_ams: "{{ (tray_index | int % 4) + 1 }}"
             tray_attr_key: "AMS {{ ams_num }} Tray {{ tray_in_ams }}"
