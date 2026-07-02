@@ -121,6 +121,42 @@ static uint8_t sanitizeLedPin(uint8_t pin) {
     return pin;
 }
 
+// Feature-owned pins (LCD, TFT, keypad) are only off-limits when that feature
+// is enabled — on the WROOM the TFT DC pin doubles as the default status LED,
+// so unconditional blocking would reject the board default itself. Called at
+// save time where the update's own feature flags are authoritative.
+static uint8_t rejectFeaturePins(uint8_t pin, bool lcdOn, bool tftOn, bool keypadOn) {
+    if (pin == LED_PIN_DEFAULT) return pin;
+
+    struct FeaturePin { int16_t pin; bool active; const char* what; };
+    const FeaturePin featurePins[] = {
+        { PIN_LCD_SDA,     lcdOn,    "LCD" },
+        { PIN_LCD_SCL,     lcdOn,    "LCD" },
+        { PIN_TFT_MOSI,    tftOn,    "TFT" },
+        { PIN_TFT_SCLK,    tftOn,    "TFT" },
+        { PIN_TFT_CS,      tftOn,    "TFT" },
+        { PIN_TFT_DC,      tftOn,    "TFT" },
+        { PIN_TFT_RST,     tftOn,    "TFT" },
+        { PIN_TFT_BL,      tftOn,    "TFT" },
+        { PIN_KEYPAD_ROW1, keypadOn, "keypad" },
+        { PIN_KEYPAD_ROW2, keypadOn, "keypad" },
+        { PIN_KEYPAD_ROW3, keypadOn, "keypad" },
+        { PIN_KEYPAD_ROW4, keypadOn, "keypad" },
+        { PIN_KEYPAD_COL1, keypadOn, "keypad" },
+        { PIN_KEYPAD_COL2, keypadOn, "keypad" },
+        { PIN_KEYPAD_COL3, keypadOn, "keypad" },
+    };
+    for (size_t i = 0; i < sizeof(featurePins) / sizeof(featurePins[0]); i++) {
+        const FeaturePin& f = featurePins[i];
+        if (f.active && f.pin >= 0 && pin == (uint8_t)f.pin) {
+            Serial.printf("ConfigurationManager: led_pin %u is in use by the enabled %s, using default GPIO %u\n",
+                          (unsigned)pin, f.what, (unsigned)PIN_STATUS_LED);
+            return LED_PIN_DEFAULT;
+        }
+    }
+    return pin;
+}
+
 ConfigurationManager& ConfigurationManager::getInstance() {
     static ConfigurationManager instance;
     return instance;
@@ -530,7 +566,12 @@ bool ConfigurationManager::saveToNVS(const ConfigUpdate& update) {
     prefs.putBool(NVS_KEY_WIFI_AWAKE, update.wifi_keep_awake != 0);
     prefs.putBool(NVS_KEY_U1_ON, update.u1_enabled != 0);
     prefs.putUChar(NVS_KEY_U1_CHANNEL, (update.u1_channel <= 3) ? update.u1_channel : 0);
-    prefs.putUChar(NVS_KEY_LED_PIN, sanitizeLedPin(update.led_pin));
+    {
+        uint8_t ledPin = sanitizeLedPin(update.led_pin);
+        ledPin = rejectFeaturePins(ledPin, update.lcd_enabled != 0,
+                                   update.tft_enabled != 0, update.keypad_enabled != 0);
+        prefs.putUChar(NVS_KEY_LED_PIN, ledPin);
+    }
 
     // Invalidate Spoolman enrichment cache on config change to force re-fetch
     // (config change could invalidate cached spool lookups)
