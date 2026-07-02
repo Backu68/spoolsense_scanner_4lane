@@ -13,7 +13,8 @@ reviews:
     enabled: true
     drafts: false
     base_branches:
-      - ".*"
+      - "main"
+      - "dev"
 
   instructions: |
     This is an ESP32 Arduino firmware project (C++17) using PlatformIO.
