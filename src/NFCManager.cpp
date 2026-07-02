@@ -1764,6 +1764,44 @@ bool NFCManager::checkWriteCapacity(uint8_t startPage, uint8_t pageCount, const 
     return true;
 }
 
+// Re-read the written region and compare — a tag can ACK a write that lands
+// corrupted at weak coupling. Read goes straight to hardware (no cache on the
+// ISO14443 path). (#167)
+bool NFCManager::verifyTigerTagReadback(const uint8_t* expected) {
+    uint8_t readback[40];
+    uint16_t n = connection_->readISO14443Pages(4, 10, readback, sizeof(readback), false);
+    if (n < 40) {
+        Serial.printf("NFCManager: WRITE_TIGERTAG verify read returned %u bytes\n", n);
+        return false;
+    }
+    return memcmp(readback, expected, 40) == 0;
+}
+
+// Shared tail for every successful TigerTag write path: verify, recover once
+// with a full rewrite on mismatch, then fail loudly.
+bool NFCManager::tigertagVerifyAndFinish(const NFCWriteRequest& request, const char* how) {
+    if (verifyTigerTagReadback(request.data.tigertag_data)) {
+        Serial.printf("NFCManager: WRITE_TIGERTAG succeeded (%s, verified)\n", how);
+        LogBuffer::getInstance().logPrintf("Write TigerTag: OK (%s, verified)\n", how);
+        forceRescan();
+        return true;
+    }
+
+    Serial.println("NFCManager: WRITE_TIGERTAG verify mismatch — full rewrite retry");
+    LogBuffer::getInstance().logPrintf("Write TigerTag: verify mismatch, rewriting\n");
+    if (connection_->writeISO14443Pages(4, 10, request.data.tigertag_data, 40)
+            && verifyTigerTagReadback(request.data.tigertag_data)) {
+        Serial.println("NFCManager: WRITE_TIGERTAG succeeded (recovery rewrite, verified)");
+        LogBuffer::getInstance().logPrintf("Write TigerTag: OK (rewrite, verified)\n");
+        forceRescan();
+        return true;
+    }
+
+    Serial.println("NFCManager: WRITE_TIGERTAG verify failed after rewrite");
+    LogBuffer::getInstance().logPrintf("Write TigerTag: FAILED (verify)\n");
+    return false;
+}
+
 bool NFCManager::executeTigerTagWrite(const NFCWriteRequest& request) {
     if (!validateWriteUid(request.expected_spool_id, "WRITE_TIGERTAG")) return false;
     if (!checkWriteCapacity(4, 10, "WRITE_TIGERTAG")) return false;
@@ -1777,16 +1815,12 @@ bool NFCManager::executeTigerTagWrite(const NFCWriteRequest& request) {
         Serial.printf("NFCManager: WRITE_TIGERTAG pre-read returned %u bytes, falling back to full write\n",
                       bytesRead);
         LogBuffer::getInstance().logPrintf("Write TigerTag: pre-read failed, full write\n");
-        bool ok = connection_->writeISO14443Pages(4, 10, request.data.tigertag_data, 40);
-        if (ok) {
-            Serial.println("NFCManager: WRITE_TIGERTAG succeeded");
-            LogBuffer::getInstance().logPrintf("Write TigerTag: OK\n");
-            forceRescan();
-        } else {
+        if (!connection_->writeISO14443Pages(4, 10, request.data.tigertag_data, 40)) {
             Serial.println("NFCManager: WRITE_TIGERTAG failed");
             LogBuffer::getInstance().logPrintf("Write TigerTag: FAILED\n");
+            return false;
         }
-        return ok;
+        return tigertagVerifyAndFinish(request, "full write");
     }
 
     // Build contiguous runs of changed pages. 10 pages alternating → at most 5 runs.
@@ -1827,10 +1861,7 @@ bool NFCManager::executeTigerTagWrite(const NFCWriteRequest& request) {
                           r, run.startPage, run.pageCount);
             LogBuffer::getInstance().logPrintf("Write TigerTag: run failed, full rewrite\n");
             if (connection_->writeISO14443Pages(4, 10, request.data.tigertag_data, 40)) {
-                Serial.println("NFCManager: WRITE_TIGERTAG full rewrite succeeded");
-                LogBuffer::getInstance().logPrintf("Write TigerTag: OK (full rewrite)\n");
-                forceRescan();
-                return true;
+                return tigertagVerifyAndFinish(request, "full rewrite");
             }
             Serial.println("NFCManager: WRITE_TIGERTAG full rewrite failed");
             LogBuffer::getInstance().logPrintf("Write TigerTag: FAILED\n");
@@ -1840,10 +1871,7 @@ bool NFCManager::executeTigerTagWrite(const NFCWriteRequest& request) {
     }
 
     Serial.printf("NFCManager: WRITE_TIGERTAG wrote %u/10 pages in %u run(s)\n", totalPages, runCount);
-    LogBuffer::getInstance().logPrintf("Write TigerTag: OK (%u/10 pages, %u run%s)\n",
-                                       totalPages, runCount, runCount == 1 ? "" : "s");
-    forceRescan();
-    return true;
+    return tigertagVerifyAndFinish(request, "partial write");
 }
 
 bool NFCManager::executeOpenTag3DWrite(const NFCWriteRequest& request) {
