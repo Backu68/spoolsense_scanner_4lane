@@ -2026,16 +2026,25 @@ bool WebServerManager::enrichUpdateSpool(WiFiClient& client, HTTPClient& http, c
 
     // Only touch extras when writing tag_format. Spoolman PATCH replaces the
     // entire extra map, so the existing extras (nfc_id, middleware fields like
-    // MMU Gate) must be carried over or they get wiped.
-    StaticJsonDocument<384> existingExtra;
+    // MMU Gate) must be carried over or they get wiped. If the existing extras
+    // fail to parse (or overflow the buffer), skip the extras portion entirely
+    // rather than PATCHing a partial map — losing tag_format is harmless,
+    // wiping nfc_id is not.
+    StaticJsonDocument<768> existingExtra;
     if (tagFormat[0] != '\0') {
+        DeserializationError extraErr = DeserializationError::Ok;
         if (existingExtraJson[0] != '\0') {
-            deserializeJson(existingExtra, existingExtraJson);
+            extraErr = deserializeJson(existingExtra, existingExtraJson);
         }
-        char fmtJson[20];
-        snprintf(fmtJson, sizeof(fmtJson), "\"%s\"", tagFormat);
-        existingExtra["tag_format"] = fmtJson;
-        patch["extra"] = existingExtra;
+        if (extraErr == DeserializationError::Ok) {
+            char fmtJson[20];
+            snprintf(fmtJson, sizeof(fmtJson), "\"%s\"", tagFormat);
+            existingExtra["tag_format"] = fmtJson;
+            patch["extra"] = existingExtra;
+        } else {
+            Serial.printf("WebServer: existing extras unparseable (%s) — skipping tag_format write\n",
+                          extraErr.c_str());
+        }
     }
     if (remainingG > 0) {
         float initialW = existingInitialWeight > 0 ? existingInitialWeight : 1000.0f;
