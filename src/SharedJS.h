@@ -784,7 +784,8 @@ async function saveEnrichmentToSpoolman(uid, config) {
         diameter_mm: fields.diameterMm || 1.75,
         density: fields.density || 0,
         vendor_id: vendorId,
-        filament_id: filamentId
+        filament_id: filamentId,
+        tag_format: config.tagFormat || ''
       })
     });
     var result = await resp.json();

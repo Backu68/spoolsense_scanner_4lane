@@ -294,6 +294,7 @@ const char OPENSPOOL_WRITER_HTML[] PROGMEM = R"rawliteral(
         },
         afterSuccess: function(uid) {
           return saveEnrichmentToSpoolman(uid, {
+            tagFormat: 'openspool',
             enrichmentFieldIds: ENRICHMENT_FIELDS,
             getFields: function() {
               var nozzleMin = parseInt(document.getElementById('min_temp').value) || 0;
