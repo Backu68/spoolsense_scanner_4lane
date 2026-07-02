@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- **Configurable status LED pin** — new optional `led_pin` setting on the config page (Hardware section). Empty means the board default; overrides are validated against per-board rules (strap pins, flash pins, input-only pins, PSRAM-reserved pins) at the NVS boundary and fall back to the default with a serial warning if invalid. (#203, closes #196)
+
 ## [1.7.6] - 2026-07-02
 
 ### Added
