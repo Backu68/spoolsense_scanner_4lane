@@ -1,14 +1,11 @@
 # Changelog
 
-## [Unreleased]
+## [1.7.6] - 2026-07-02
 
 ### Added
 
 - **Spoolman links on the reader page** — every Spoolman ID shown after a scan is now a link that opens that spool's page in Spoolman's web UI (new tab). Also fixes the OpenSpool reader view's existing link, which used a hash route that landed on Spoolman's home page instead of the spool. (#179)
 - **Prusa MK4 / MMU3 HA blueprints** — two Home Assistant blueprints (`spoolsense_prusa_binding.yaml` + `spoolsense_prusa_lifecycle.yaml`) implementing per-slot Prusa spool tracking via HA orchestration. Default model is one scanner per slot (5 for MMU3). Pre-print material check uses bidirectional substring match; post-print deduction publishes per-tool grams via `cmd/deduct/<UID>` MQTT (reuses v1.6.14 path). Cancel proration by last-known progress %. PrusaLink local API has no slot-binding writes, so HA orchestration is the only path. Setup guide at [spoolsense.org/installation/prusa](https://spoolsense.org/installation/prusa/). Untested on real Prusa hardware. (#187, #195)
-
-### Added (writer pages)
-
 - **`tag_format` saved to Spoolman extras on enrichment save** — the TigerTag, OpenTag3D, and OpenSpool writer pages now record the tag's format (`tigertag`, `opentag3d`, `openspool`) in the spool's `Tag Format` extra field, matching what auto-sync already writes. Spool updates merge with existing extras so middleware-managed fields (like Happy Hare's MMU Gate) are preserved. (#185)
 
 ### Fixed
