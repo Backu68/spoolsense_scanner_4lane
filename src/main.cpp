@@ -102,16 +102,29 @@ void initWiFi() {
     lcdManager.updateScreen("Connecting WiFi", "");
   }
 
-  WiFi.setHostname(config.getHostname());
-  WiFi.begin(config.getWiFiSSID(), config.getWiFiPassword());
+  // Explicit STA init order matters on C3: disconnect(true) clears stale
+  // association state (BSSID/PMK from prior sessions), and modem-sleep must be
+  // configured before begin() or the initial 802.11 handshake runs with the
+  // default sleep mode. C3 SuperMini (Plus) boards fail to associate without this.
+  WiFi.disconnect(true);
+  delay(100);
+  WiFi.mode(WIFI_STA);
   // Keep-awake disables WIFI_PS_MIN_MODEM (Arduino default). Users on weak
   // networks report ~10 dB better RSSI with modem sleep off; costs idle current.
   WiFi.setSleep(!config.isWifiKeepAwakeEnabled());
+  WiFi.setHostname(config.getHostname());
+  WiFi.begin(config.getWiFiSSID(), config.getWiFiPassword());
 
+  // Status code every 3s so failures are diagnosable from serial:
+  // 1=NO_SSID_AVAIL (SSID not seen), 4=CONNECT_FAILED (auth), 6=DISCONNECTED
   int attempts = 0;
-  while (WiFi.status() != WL_CONNECTED && attempts < 30) {
+  while (WiFi.status() != WL_CONNECTED && attempts < 60) {
     delay(500);
-    Serial.print(".");
+    if (attempts % 6 == 5) {
+      Serial.printf(" [status=%d]", (int)WiFi.status());
+    } else {
+      Serial.print(".");
+    }
     attempts++;
   }
 
@@ -148,7 +161,8 @@ void initWiFi() {
     g_wifiWasConnected = true;
   } else {
     Serial.println("");
-    Serial.println("WiFi connection failed - starting AP mode");
+    Serial.printf("WiFi connection failed (status=%d) - starting AP mode\n",
+                  (int)WiFi.status());
     startAPMode();
   }
 }
