@@ -5,14 +5,12 @@
 ### Added
 
 - **Spoolman links on the reader page** — every Spoolman ID shown after a scan is now a link that opens that spool's page in Spoolman's web UI (new tab). Also fixes the OpenSpool reader view's existing link, which used a hash route that landed on Spoolman's home page instead of the spool. (#179)
+- **Prusa MK4 / MMU3 HA blueprints** — two Home Assistant blueprints (`spoolsense_prusa_binding.yaml` + `spoolsense_prusa_lifecycle.yaml`) implementing per-slot Prusa spool tracking via HA orchestration. Default model is one scanner per slot (5 for MMU3). Pre-print material check uses bidirectional substring match; post-print deduction publishes per-tool grams via `cmd/deduct/<UID>` MQTT (reuses v1.6.14 path). Cancel proration by last-known progress %. PrusaLink local API has no slot-binding writes, so HA orchestration is the only path. Setup guide at [spoolsense.org/installation/prusa](https://spoolsense.org/installation/prusa/). Untested on real Prusa hardware. (#187, #195)
 
 ### Fixed
 
+- **WiFi association failures on ESP32-C3 (SuperMini / SuperMini Plus)** — station init now clears stale association state and sets mode + sleep configuration before `WiFi.begin()`. Boards that previously fell back to AP mode on every boot connect normally. Connect window extended from 15s to 30s, and the WiFi status code is logged during the wait and on failure so unsuccessful connects are diagnosable from serial.
 - **Bambu deduction blueprint template error** — `tray_index` used `loop.index0`, which is only defined inside Jinja `{% for %}` blocks, not HA `repeat:` actions. Newer Home Assistant versions raise `UndefinedError: 'loop' is undefined` and the deduction never fires. Now uses `repeat.index - 1`. Re-import the blueprint after updating. (#200)
-
-### Added
-
-- **Prusa MK4 / MMU3 HA blueprints** — two Home Assistant blueprints (`spoolsense_prusa_binding.yaml` + `spoolsense_prusa_lifecycle.yaml`) implementing per-slot Prusa spool tracking via HA orchestration. Default model is one scanner per slot (5 for MMU3). Pre-print material check uses bidirectional substring match; post-print deduction publishes per-tool grams via `cmd/deduct/<UID>` MQTT (reuses v1.6.14 path). Cancel proration by last-known progress %. PrusaLink local API has no slot-binding writes, so HA orchestration is the only path. Setup guide at [spoolsense.org/installation/prusa](https://spoolsense.org/installation/prusa/). Untested on real Prusa hardware. (#187, #195)
 
 ---
 
