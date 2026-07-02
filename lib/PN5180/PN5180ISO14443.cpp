@@ -251,11 +251,15 @@ bool PN5180ISO14443::mifareBlockWrite4(uint8_t pageno, const uint8_t *data) {
 	// Return transceiver to Idle so the next sendData finds WaitTransmit state
 	writeRegisterWithAndMask(SYSTEM_CONFIG, 0xfffffff8);
 
-	if (ack != 0x0A) {
+	// The ACK is a 4-bit response (0xA) delivered in the low nibble; the upper
+	// nibble is undefined. Exact-matching the full byte misclassified real ACKs
+	// (e.g. 0x2A) as NAKs and triggered destructive retries of successful writes.
+	bool acked = (rxLen >= 1) && ((ack & 0x0F) == 0x0A);
+	if (!acked) {
 		Serial.printf("PN5180: mifareBlockWrite4 page %d NAK/bad ACK=0x%02X (rxLen=%d)\n", pageno, ack, rxLen);
 	}
 
-	return (ack == 0x0A);
+	return acked;
 }
 
 bool PN5180ISO14443::mifareHalt() {
@@ -264,6 +268,12 @@ bool PN5180ISO14443::mifareHalt() {
 	cmd[0] = 0x50;
 	cmd[1] = 0x00;
 	sendData(cmd, 2, 0x00);
+	// HLTA never gets a response, so the transceiver parks in WaitReceive.
+	// Abort back to Idle and clear IRQs — loadRFConfig during an active
+	// transceive is illegal and wedges the state machine (sendData then fails
+	// with state=3, and re-activation fails until the RF field is cycled).
+	writeRegisterWithAndMask(SYSTEM_CONFIG, 0xfffffff8);
+	clearIRQStatus(0xffffffff);
 	return true;
 }
 
