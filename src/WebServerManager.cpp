@@ -826,8 +826,12 @@ void WebServerManager::handleApiPostConfig() {
         if (ledPinStr[0] == '\0') {
             update.led_pin = LED_PIN_DEFAULT;
         } else {
-            int p = atoi(ledPinStr);
-            update.led_pin = (p >= 0 && p <= 254) ? (uint8_t)p : LED_PIN_DEFAULT;
+            // Strict parse: the whole string must be numeric, else fall back to
+            // default — atoi("abc") would silently become GPIO 0.
+            char* end = nullptr;
+            long p = strtol(ledPinStr, &end, 10);
+            bool numeric = (end != ledPinStr) && (*end == '\0');
+            update.led_pin = (numeric && p >= 0 && p <= 254) ? (uint8_t)p : LED_PIN_DEFAULT;
         }
     }
 

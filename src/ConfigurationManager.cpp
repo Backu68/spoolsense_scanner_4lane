@@ -72,6 +72,22 @@ static uint8_t sanitizeLedPin(uint8_t pin) {
         return LED_PIN_DEFAULT;  // no override requested
     }
 
+    // NFC reader pins are always in use — driving NeoPixel on the SPI bus or a
+    // control line breaks scanning outright. PN532 aliases the PN5180 pins on
+    // every board, so this set covers both readers.
+    static const int16_t nfcPins[] = {
+        PIN_PN5180_NSS, PIN_PN5180_SCK, PIN_PN5180_MISO, PIN_PN5180_MOSI,
+        PIN_PN5180_RST, PIN_PN5180_BUSY, PIN_PN5180_GPIO, PIN_PN5180_IRQ,
+        PIN_PN5180_AUX,
+    };
+    for (size_t i = 0; i < sizeof(nfcPins) / sizeof(nfcPins[0]); i++) {
+        if (nfcPins[i] >= 0 && pin == (uint8_t)nfcPins[i]) {
+            Serial.printf("ConfigurationManager: led_pin %u is an NFC reader pin, using default GPIO %u\n",
+                          (unsigned)pin, (unsigned)PIN_STATUS_LED);
+            return LED_PIN_DEFAULT;
+        }
+    }
+
     bool valid;
 #if defined(BOARD_ESP32_C3)
     // C3 exposes only GPIO 0-21; flash (12-17), USB-serial (18-19) and straps
