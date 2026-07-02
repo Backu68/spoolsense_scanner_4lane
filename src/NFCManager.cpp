@@ -615,6 +615,7 @@ void NFCManager::scanLoop() {
         }
 
         if (connection_->detectTag(uid, &uidLength)) {
+            absentMisses_ = 0;
             if (!lastSeenValid || memcmp(uid, lastSeenUid, uidLength) != 0) {
                 char uidHex[17]; uidHex[0] = '\0';
                 for (uint8_t i = 0; i < uidLength; i++) snprintf(uidHex + i*2, 3, "%02X", uid[i]);
@@ -627,8 +628,16 @@ void NFCManager::scanLoop() {
                 handleNewTag(uid, uidLength);
             }
             processWriteQueue();
-        } else {
+        } else if (!lastSeenValid) {
+            // Nothing was present — no debounce needed, keep state cleared
             handleTagAbsent();
+        } else if (++absentMisses_ >= TAG_ABSENT_MISS_THRESHOLD) {
+            // Debounce removal: single failed reads happen with stationary tags
+            // (RF hiccups, marginal coupling). Only declare the tag gone after
+            // several consecutive misses, or present/removed flaps every few
+            // seconds and every subscriber (MQTT, HA, displays) flaps with it.
+            handleTagAbsent();
+            absentMisses_ = 0;
         }
 
         vTaskDelay(pdMS_TO_TICKS(50));
