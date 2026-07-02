@@ -82,6 +82,14 @@ const char READER_HTML[] PROGMEM = R"rawliteral(
            + 'Spoolman</span>';
     }
 
+    // Spool ID as a link to the spool's page in Spoolman's web UI (#179).
+    // Falls back to plain text when the Spoolman URL isn't configured yet.
+    function spoolmanLink(id) {
+      if (!spoolmanUrl) return '#' + id;
+      return '<a href="' + spoolmanUrl + '/spool/show/' + id + '" target="_blank" '
+           + 'rel="noopener noreferrer" style="color:#4a9eff">#' + id + '</a>';
+    }
+
     function colorValue(hex) {
       if (!hex) return '&mdash;';
       return '<span class="color-swatch" style="background:' + hex + '"></span>' + hex;
@@ -101,14 +109,14 @@ const char READER_HTML[] PROGMEM = R"rawliteral(
       if (s.min_print_temp) html += row('Print Temp', s.min_print_temp + ' \u2013 ' + (s.max_print_temp || '?') + ' \u00B0C');
       if (s.preheat_temp) html += row('Preheat', s.preheat_temp + ' \u00B0C');
       if (s.min_bed_temp) html += row('Bed Temp', s.min_bed_temp + ' \u2013 ' + (s.max_bed_temp || '?') + ' \u00B0C');
-      if (s.spoolman_id > 0) html += row('Spoolman ID', s.spoolman_id);
+      if (s.spoolman_id > 0) html += row('Spoolman ID', spoolmanLink(s.spoolman_id));
       if (s.spoolman) {
         // remaining_g suppressed: OPT already shows remaining weight from tag data
         if (s.spoolman.bed_temp !== undefined && s.spoolman.bed_temp > 0) {
           html += row('Bed Temp', s.spoolman.bed_temp + ' \u00B0C' + spoolmanBadge());
         }
         if (s.spoolman.spool_id !== undefined && s.spoolman.spool_id > 0) {
-          html += row('Spoolman ID', '#' + s.spoolman.spool_id + spoolmanBadge());
+          html += row('Spoolman ID', spoolmanLink(s.spoolman.spool_id) + spoolmanBadge());
         }
       }
       return html;
@@ -136,7 +144,7 @@ const char READER_HTML[] PROGMEM = R"rawliteral(
           html += row('Bed Temp', s.spoolman.bed_temp + ' \u00B0C' + spoolmanBadge());
         }
         if (s.spoolman.spool_id !== undefined && s.spoolman.spool_id > 0) {
-          html += row('Spoolman ID', '#' + s.spoolman.spool_id + spoolmanBadge());
+          html += row('Spoolman ID', spoolmanLink(s.spoolman.spool_id) + spoolmanBadge());
         }
       }
       return html;
@@ -175,7 +183,7 @@ const char READER_HTML[] PROGMEM = R"rawliteral(
           html += row('Bed Temp', s.spoolman.bed_temp + ' \u00B0C' + spoolmanBadge());
         }
         if (s.spoolman.spool_id !== undefined && s.spoolman.spool_id > 0) {
-          html += row('Spoolman ID', '#' + s.spoolman.spool_id + spoolmanBadge());
+          html += row('Spoolman ID', spoolmanLink(s.spoolman.spool_id) + spoolmanBadge());
         }
       }
       return html;
@@ -191,7 +199,7 @@ const char READER_HTML[] PROGMEM = R"rawliteral(
       if (t.color_hex) html += row('Color', colorValue(t.color_hex));
       if (t.min_temp > 0 && t.max_temp > 0) html += row('Nozzle Temp', t.min_temp + ' \u2013 ' + t.max_temp + ' \u00B0C');
       else if (t.min_temp > 0) html += row('Nozzle Temp', t.min_temp + ' \u00B0C');
-      if (s.spoolman_id > 0) html += row('Spoolman ID', '<a href="' + spoolmanUrl + '/#/spool/' + s.spoolman_id + '" target="_blank">' + s.spoolman_id + '</a>');
+      if (s.spoolman_id > 0) html += row('Spoolman ID', spoolmanLink(s.spoolman_id));
       if (s.spoolman) {
         if (s.spoolman.remaining_g !== undefined) {
           html += row('Remaining', s.spoolman.remaining_g.toFixed(1) + ' g' + spoolmanBadge());
@@ -200,7 +208,7 @@ const char READER_HTML[] PROGMEM = R"rawliteral(
           html += row('Bed Temp', s.spoolman.bed_temp + ' \u00B0C' + spoolmanBadge());
         }
         if (!s.spoolman_id && s.spoolman.spool_id !== undefined && s.spoolman.spool_id > 0) {
-          html += row('Spoolman ID', '#' + s.spoolman.spool_id + spoolmanBadge());
+          html += row('Spoolman ID', spoolmanLink(s.spoolman.spool_id) + spoolmanBadge());
         }
       }
       return html;
@@ -226,7 +234,7 @@ const char READER_HTML[] PROGMEM = R"rawliteral(
           html += row('Remaining', s.spoolman.remaining_g.toFixed(1) + ' g' + spoolmanBadge());
         }
         if (s.spoolman.spool_id !== undefined && s.spoolman.spool_id > 0) {
-          html += row('Spoolman ID', '#' + s.spoolman.spool_id + spoolmanBadge());
+          html += row('Spoolman ID', spoolmanLink(s.spoolman.spool_id) + spoolmanBadge());
         }
       }
       return html;
@@ -240,7 +248,7 @@ const char READER_HTML[] PROGMEM = R"rawliteral(
       if (s.manufacturer)  html += row('Manufacturer', s.manufacturer);
       if (s.color)         html += row('Color', '<span class="color-swatch" style="background:' + s.color + '"></span> ' + s.color);
       if (s.remaining_g !== undefined) html += row('Remaining', s.remaining_g.toFixed(1) + ' g');
-      if (s.spoolman_id > 0) html += row('Spoolman ID', s.spoolman_id);
+      if (s.spoolman_id > 0) html += row('Spoolman ID', spoolmanLink(s.spoolman_id));
       if (s.extruder_temp > 0) html += row('Extruder Temp', s.extruder_temp + ' &deg;C');
       if (s.bed_temp > 0) html += row('Bed Temp', s.bed_temp + ' &deg;C');
       if (!s.material_name && !s.tag_data_valid) html += row('Data', '<em>Looking up in Spoolman&hellip; keep tag on reader</em>');

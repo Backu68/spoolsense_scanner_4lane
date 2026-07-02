@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- **Spoolman links on the reader page** — every Spoolman ID shown after a scan is now a link that opens that spool's page in Spoolman's web UI (new tab). Also fixes the OpenSpool reader view's existing link, which used a hash route that landed on Spoolman's home page instead of the spool. (#179)
+
 ### Fixed
 
 - **Bambu deduction blueprint template error** — `tray_index` used `loop.index0`, which is only defined inside Jinja `{% for %}` blocks, not HA `repeat:` actions. Newer Home Assistant versions raise `UndefinedError: 'loop' is undefined` and the deduction never fires. Now uses `repeat.index - 1`. Re-import the blueprint after updating. (#200)
