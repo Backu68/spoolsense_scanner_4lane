@@ -570,6 +570,7 @@ const char TIGERTAG_WRITER_HTML[] PROGMEM = R"rawliteral(
         },
         afterSuccess: function(uid) {
           return saveEnrichmentToSpoolman(uid, {
+            tagFormat: 'tigertag',
             enrichmentFieldIds: ENRICHMENT_FIELDS,
             getFields: function() {
               var nozzleMin = parseInt(document.getElementById('nozzle_min').value) || 0;

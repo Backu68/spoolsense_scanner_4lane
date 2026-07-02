@@ -522,6 +522,7 @@ const char OPENTAG3D_WRITER_HTML[] PROGMEM = R"rawliteral(
         },
         afterSuccess: function(uid) {
           return saveEnrichmentToSpoolman(uid, {
+            tagFormat: 'opentag3d',
             enrichmentFieldIds: ENRICHMENT_FIELDS,
             getFields: function() {
               var nozzleMin = parseInt(document.getElementById('min_print_temp_c').value) || 0;

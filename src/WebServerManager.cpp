@@ -412,13 +412,14 @@ void WebServerManager::handleApiRegisterUid() {
     snprintf(quotedUid, sizeof(quotedUid), "\"%s\"", uid);
 
     float existingInitialWeight = 0.0f;
-    int spoolId = enrichFindSpoolByUid(client, http, baseUrl, quotedUid, existingInitialWeight);
+    String linkExtraJson;
+    int spoolId = enrichFindSpoolByUid(client, http, baseUrl, quotedUid, existingInitialWeight, linkExtraJson);
 
     if (spoolId > 0) {
         // Spool exists — update it instead of creating a duplicate
         Serial.printf("register-uid: found existing spool %d, updating\n", spoolId);
         float effInitial = initialWeight > 0 ? initialWeight : existingInitialWeight;
-        if (!enrichUpdateSpool(client, http, baseUrl, spoolId, filamentId, remainingWeight, effInitial)) {
+        if (!enrichUpdateSpool(client, http, baseUrl, spoolId, filamentId, remainingWeight, effInitial, "", "")) {
             xSemaphoreGive(g_httpMutex);
             sendError(500, "Failed to update existing spool");
             return;
@@ -1983,7 +1984,8 @@ int WebServerManager::enrichFindOrCreateFilament(WiFiClient& client, HTTPClient&
 
 // Fetch all spools and match nfc_id client-side — Spoolman's extra_field filter is unreliable
 int WebServerManager::enrichFindSpoolByUid(WiFiClient& client, HTTPClient& http,
-                                            const char* baseUrl, const char* quotedUid, float& outInitialWeight) {
+                                            const char* baseUrl, const char* quotedUid, float& outInitialWeight,
+                                            String& outExtraJson) {
     char url[256];
     snprintf(url, sizeof(url), "%s/api/v1/spool?limit=200", baseUrl);
     http.begin(client, url);
@@ -1991,6 +1993,7 @@ int WebServerManager::enrichFindSpoolByUid(WiFiClient& client, HTTPClient& http,
     int code = http.GET();
     int spoolId = -1;
     outInitialWeight = 0.0f;
+    outExtraJson = "";
     if (code == 200) {
         String response = http.getString();
         DynamicJsonDocument sDoc(16384);
@@ -2002,6 +2005,9 @@ int WebServerManager::enrichFindSpoolByUid(WiFiClient& client, HTTPClient& http,
                 if (arr[i]["archived"] | false) continue;
                 spoolId = arr[i]["id"] | -1;
                 outInitialWeight = arr[i]["initial_weight"] | 0.0f;
+                // Capture existing extras — Spoolman PATCH replaces the whole
+                // extra map, so any update that touches extras must merge
+                serializeJson(arr[i]["extra"], outExtraJson);
                 break;
             }
         }
@@ -2012,10 +2018,25 @@ int WebServerManager::enrichFindSpoolByUid(WiFiClient& client, HTTPClient& http,
 
 // PATCH existing spool — Spoolman uses used_weight (not remaining_weight) for weight tracking
 bool WebServerManager::enrichUpdateSpool(WiFiClient& client, HTTPClient& http, const char* baseUrl,
-                                           int spoolId, int filamentId, float remainingG, float existingInitialWeight) {
+                                           int spoolId, int filamentId, float remainingG, float existingInitialWeight,
+                                           const char* existingExtraJson, const char* tagFormat) {
     char url[256];
-    StaticJsonDocument<256> patch;
+    StaticJsonDocument<512> patch;
     patch["filament_id"] = filamentId;
+
+    // Only touch extras when writing tag_format. Spoolman PATCH replaces the
+    // entire extra map, so the existing extras (nfc_id, middleware fields like
+    // MMU Gate) must be carried over or they get wiped.
+    StaticJsonDocument<384> existingExtra;
+    if (tagFormat[0] != '\0') {
+        if (existingExtraJson[0] != '\0') {
+            deserializeJson(existingExtra, existingExtraJson);
+        }
+        char fmtJson[20];
+        snprintf(fmtJson, sizeof(fmtJson), "\"%s\"", tagFormat);
+        existingExtra["tag_format"] = fmtJson;
+        patch["extra"] = existingExtra;
+    }
     if (remainingG > 0) {
         float initialW = existingInitialWeight > 0 ? existingInitialWeight : 1000.0f;
         float usedW = initialW - remainingG;
@@ -2035,7 +2056,8 @@ bool WebServerManager::enrichUpdateSpool(WiFiClient& client, HTTPClient& http, c
 }
 
 int WebServerManager::enrichCreateSpool(WiFiClient& client, HTTPClient& http, const char* baseUrl,
-                                          int filamentId, float remainingG, const char* quotedUid) {
+                                          int filamentId, float remainingG, const char* quotedUid,
+                                          const char* tagFormat) {
     char url[256];
     StaticJsonDocument<512> sBody;
     sBody["filament_id"] = filamentId;
@@ -2048,6 +2070,11 @@ int WebServerManager::enrichCreateSpool(WiFiClient& client, HTTPClient& http, co
     }
     JsonObject extra = sBody.createNestedObject("extra");
     extra["nfc_id"] = quotedUid;
+    char fmtJson[20];
+    if (tagFormat[0] != '\0') {
+        snprintf(fmtJson, sizeof(fmtJson), "\"%s\"", tagFormat);
+        extra["tag_format"] = fmtJson;
+    }
     String sJson;
     serializeJson(sBody, sJson);
     snprintf(url, sizeof(url), "%s/api/v1/spool", baseUrl);
@@ -2093,6 +2120,21 @@ void WebServerManager::handleApiSpoolmanSaveEnrichment() {
     int   confirmedVendorId   = doc["vendor_id"]   | -1;
     int   confirmedFilamentId = doc["filament_id"] | -1;
 
+    // tag_format: lowercase alnum + underscore, canonical values from
+    // tagKindToMqttFormat (openprinttag, tigertag, opentag3d, openspool, ...)
+    char tagFormat[16] = "";
+    {
+        const char* tf = doc["tag_format"] | "";
+        size_t n = 0;
+        for (; tf[n] != '\0' && n < sizeof(tagFormat) - 1; n++) {
+            char c = tf[n];
+            bool ok = (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_';
+            if (!ok) { n = 0; break; }
+            tagFormat[n] = c;
+        }
+        tagFormat[n] = '\0';
+    }
+
     if (uid[0] == '\0') {
         _server.send(400, "application/json", "{\"error\":\"uid required\"}");
         return;
@@ -2119,16 +2161,18 @@ void WebServerManager::handleApiSpoolmanSaveEnrichment() {
     char quotedUid[130];
     snprintf(quotedUid, sizeof(quotedUid), "\"%s\"", uid);
     float existingInitialWeight = 0.0f;
-    int spoolId = enrichFindSpoolByUid(client, http, baseUrl, quotedUid, existingInitialWeight);
+    String existingExtraJson;
+    int spoolId = enrichFindSpoolByUid(client, http, baseUrl, quotedUid, existingInitialWeight, existingExtraJson);
 
     if (spoolId > 0) {
-        if (!enrichUpdateSpool(client, http, baseUrl, spoolId, filamentId, remainingG, existingInitialWeight)) {
+        if (!enrichUpdateSpool(client, http, baseUrl, spoolId, filamentId, remainingG, existingInitialWeight,
+                               existingExtraJson.c_str(), tagFormat)) {
             xSemaphoreGive(g_httpMutex);
             _server.send(500, "application/json", "{\"error\":\"spool update failed\"}");
             return;
         }
     } else {
-        spoolId = enrichCreateSpool(client, http, baseUrl, filamentId, remainingG, quotedUid);
+        spoolId = enrichCreateSpool(client, http, baseUrl, filamentId, remainingG, quotedUid, tagFormat);
     }
 
     StaticJsonDocument<128> result;
