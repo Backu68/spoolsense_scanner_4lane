@@ -162,6 +162,8 @@ private:
     bool lastSeenValid = false;
     unsigned long lastSeenMs = 0;            // millis() when last tag was detected
     static constexpr unsigned long SCAN_COOLDOWN_MS = 3000;  // suppress re-reads within 3s
+    uint8_t absentMisses_ = 0;               // consecutive failed detects while a tag was present
+    static constexpr uint8_t TAG_ABSENT_MISS_THRESHOLD = 3;  // ~150ms at 50ms poll before declaring removal
 
     // Recent spools history (RAM only, most recent first)
     RecentSpoolEntry recentSpools[MAX_RECENT_SPOOLS];

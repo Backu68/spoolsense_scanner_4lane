@@ -9,6 +9,7 @@
 
 ### Fixed
 
+- **Tag present/removed flapping with stationary tags** — a single failed read (RF hiccup, marginal coupling) immediately declared the tag removed, and the next 50ms poll re-detected it. Every subscriber flapped with it: MQTT `present`, the HA sensor, displays. Removal is now debounced behind 3 consecutive misses (~150ms). Reported by two users (serial log flapping every ~5s; HA sensor "hopping").
 - **WiFi association failures on ESP32-C3 (SuperMini / SuperMini Plus)** — station init now clears stale association state and sets mode + sleep configuration before `WiFi.begin()`. Boards that previously fell back to AP mode on every boot connect normally. Connect window extended from 15s to 30s, and the WiFi status code is logged during the wait and on failure so unsuccessful connects are diagnosable from serial.
 - **Bambu deduction blueprint template error** — `tray_index` used `loop.index0`, which is only defined inside Jinja `{% for %}` blocks, not HA `repeat:` actions. Newer Home Assistant versions raise `UndefinedError: 'loop' is undefined` and the deduction never fires. Now uses `repeat.index - 1`. Re-import the blueprint after updating. (#200)
 
