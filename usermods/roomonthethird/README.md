@@ -16,12 +16,12 @@ Autodesk Fusion 360 files are included if you want to make your own edits.
 - You can add a dab of glue underneath the ESP32 if you want to.
 - Stick a piece of double sided tape or a command strip on the back of the case and stick to whatever surface you'd like.
 
-<img width="762" height="570" alt="Slicer Preview" src="https://github.com/user-attachments/assets/6ddc6953-1192-45dd-87ca-585f47ad2e97" />
+<img width="762" alt="Slicer Preview" src="slicer-preview.jpg" />
 
-<img width="5712" height="4284" alt="IMG_6063" src="https://github.com/user-attachments/assets/a9dd8866-a027-45a5-ae0d-d2f02fd60232" />
+<img width="762" alt="Assembled case" src="case-assembled-1.jpg" />
 
-<img width="5712" height="4284" alt="IMG_6064" src="https://github.com/user-attachments/assets/9dca6e79-17a4-4e8e-9d89-7f25a1511869" />
+<img width="762" alt="Assembled case" src="case-assembled-2.jpg" />
 
-<img width="4032" height="3024" alt="IMG_6065" src="https://github.com/user-attachments/assets/8c8aafe4-9c40-4638-82f9-bcc378fc31e1" />
+<img width="762" alt="Assembled case" src="case-assembled-3.jpg" />
 
 
