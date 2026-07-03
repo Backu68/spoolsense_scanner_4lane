@@ -725,7 +725,7 @@ void WebServerManager::handleApiGetConfig() {
     ConfigUpdate cfg;
     ConfigurationManager::getInstance().getCurrentConfig(cfg);
 
-    StaticJsonDocument<768> doc;
+    StaticJsonDocument<896> doc;
     doc["wifi_ssid"] = cfg.wifi_ssid;
     doc["wifi_pass_set"] = (cfg.wifi_pass[0] != '\0');
     doc["mqtt_host"] = cfg.mqtt_host;
@@ -749,6 +749,12 @@ void WebServerManager::handleApiGetConfig() {
     doc["wifi_keep_awake"] = cfg.wifi_keep_awake;
     doc["u1_enabled"] = cfg.u1_enabled;
     doc["u1_channel"] = cfg.u1_channel;
+    // led_pin: emit "" for the default sentinel so the web field shows empty
+    if (cfg.led_pin == LED_PIN_DEFAULT) {
+        doc["led_pin"] = "";
+    } else {
+        doc["led_pin"] = cfg.led_pin;
+    }
     doc["tft_enabled"] = cfg.tft_enabled;
     doc["tft_driver"] = cfg.tft_driver;
     doc["ap_mode"] = _apMode;
@@ -812,6 +818,21 @@ void WebServerManager::handleApiPostConfig() {
     {
         uint8_t ch = doc["u1_channel"] | (uint8_t)0;
         update.u1_channel = (ch <= 3) ? ch : 0;  // clamp invalid client input
+    }
+    {
+        // Sent as a string so empty (= board default) is distinguishable from GPIO 0.
+        // Board-specific pin validation happens at the NVS boundary in saveToNVS.
+        const char* ledPinStr = doc["led_pin"] | "";
+        if (ledPinStr[0] == '\0') {
+            update.led_pin = LED_PIN_DEFAULT;
+        } else {
+            // Strict parse: the whole string must be numeric, else fall back to
+            // default — atoi("abc") would silently become GPIO 0.
+            char* end = nullptr;
+            long p = strtol(ledPinStr, &end, 10);
+            bool numeric = (end != ledPinStr) && (*end == '\0');
+            update.led_pin = (numeric && p >= 0 && p <= 254) ? (uint8_t)p : LED_PIN_DEFAULT;
+        }
     }
 
     if (update.wifi_ssid[0] == '\0') {

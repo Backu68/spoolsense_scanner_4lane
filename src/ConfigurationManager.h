@@ -13,6 +13,10 @@ void sanitizeHostname(char* buf, size_t cap);
 #endif
 #define DEVICE_VERSION FIRMWARE_VERSION
 
+// led_pin sentinel: absent in NVS or 0xFF means "use the board default"
+// (PIN_STATUS_LED). Any other value is a user GPIO override. (#203)
+static constexpr uint8_t LED_PIN_DEFAULT = 0xFF;
+
 struct ConfigUpdate {
     char wifi_ssid[64];
     char wifi_pass[64];
@@ -44,6 +48,7 @@ struct ConfigUpdate {
     // Snapmaker U1 direct-mode integration (extended firmware, Filament Detection: External)
     uint8_t u1_enabled;       // 0 = off, 1 = post to /printer/filament_detect/set on scans
     uint8_t u1_channel;       // 0..3 — toolhead this scanner is bound to
+    uint8_t led_pin;          // status LED GPIO override; LED_PIN_DEFAULT = board default (#203)
 };
 
 class ConfigurationManager {
@@ -87,6 +92,9 @@ public:
     bool isKeypadEnabled() const;
     bool isTftEnabled() const;
     const char* getTftDriver() const;
+
+    // Effective status-LED GPIO: user override when set and valid, else PIN_STATUS_LED (#203)
+    uint8_t getLedPin() const;
 
     // Low-spool threshold (grams) — LED breathes when remaining weight is at or below this
     uint16_t getLowSpoolThreshold() const;
@@ -156,6 +164,8 @@ private:
     // Snapmaker U1 direct-mode
     bool _u1Enabled = false;
     uint8_t _u1Channel = 0;
+
+    uint8_t _ledPin = LED_PIN_DEFAULT;  // 0xFF = use board default (PIN_STATUS_LED)
 
     bool _initialized = false;
 };

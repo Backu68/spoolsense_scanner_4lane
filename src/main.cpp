@@ -260,7 +260,7 @@ void setup() {
   auto& config = ConfigurationManager::getInstance();
 
   if (config.isLedEnabled()) {
-    ledManager.begin(PIN_STATUS_LED);
+    ledManager.begin(config.getLedPin());
     ledManager.showBooting();
   }
 
