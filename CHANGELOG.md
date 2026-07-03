@@ -4,7 +4,7 @@
 
 ### Added
 
-- **TigerTag writes verified by readback** — after every successful write (partial, full, or recovery), pages 4–13 are re-read and compared against the intended data. A mismatch triggers one full-rewrite recovery, then fails loudly instead of reporting success on a corrupted write. (#167)
+- **Tag writes verified by readback** — TigerTag, OpenTag3D, and OpenSpool writes re-read the written pages and compare against the intended data after every reported success. A mismatch triggers one full-rewrite recovery, then fails loudly instead of reporting success on a corrupted write. Matters more now that the ACK fix is nibble-permissive: the 4-bit ACK carries no CRC, so a noise byte can read as success. (#167)
 
 ### Fixed
 
