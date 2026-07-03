@@ -366,6 +366,7 @@ bool HardwareNFCConnection::writeISO14443Pages(uint8_t startPage, uint8_t pageCo
             Serial.println("HardwareNFC: writeISO14443Pages - tag reactivation failed");
             return false;
         }
+        tagSessionActive_ = true;
     }
 
     // Write per-page with retry: ISO14443A tags lose activation after errors; retry with re-activate
@@ -376,11 +377,20 @@ bool HardwareNFCConnection::writeISO14443Pages(uint8_t startPage, uint8_t pageCo
         bool pageOk = iso14443a_->mifareBlockWrite4(page, data + (i * 4));
 
         if (!pageOk) {
-            // Retry logic: re-activate after halt, attempt write again (up to 2 retries)
+            // A tag that NAKed from RF noise is still ACTIVE — a plain resend
+            // usually recovers in ~5ms. Only tear the session down (halt +
+            // re-activate) if the resend also fails; the teardown costs 15+ms
+            // of RF churn at exactly the moment coupling is marginal.
+            retryCount++;
+            Serial.printf("HardwareNFC: writeISO14443Pages - resend for page %d\n", page);
+            delay(5);  // let the field settle before retrying
+            pageOk = iso14443a_->mifareBlockWrite4(page, data + (i * 4));
+
             for (int retry = 0; retry < 2 && !pageOk; retry++) {
                 retryCount++;
                 Serial.printf("HardwareNFC: writeISO14443Pages - retry %d for page %d\n", retry + 1, page);
                 iso14443a_->mifareHalt();
+                tagSessionActive_ = false;
                 delay(10);  // RF settle time before re-activate
                 iso14443a_->setupRF();
                 uidLen = iso14443a_->activateTypeA(response, 1);
@@ -388,6 +398,7 @@ bool HardwareNFCConnection::writeISO14443Pages(uint8_t startPage, uint8_t pageCo
                     Serial.printf("HardwareNFC: writeISO14443Pages - re-activation failed on retry %d\n", retry + 1);
                     continue;
                 }
+                tagSessionActive_ = true;
                 pageOk = iso14443a_->mifareBlockWrite4(page, data + (i * 4));
             }
 
@@ -396,6 +407,7 @@ bool HardwareNFCConnection::writeISO14443Pages(uint8_t startPage, uint8_t pageCo
                 Serial.printf("HardwareNFC: writeISO14443Pages - FAILED at page %d after retries (%lums, %d retries total)\n",
                               page, elapsed, retryCount);
                 iso14443a_->mifareHalt();
+                tagSessionActive_ = false;
                 return false;  // total write failure; clean exit for caller to retry entire sequence
             }
         }
@@ -403,6 +415,7 @@ bool HardwareNFCConnection::writeISO14443Pages(uint8_t startPage, uint8_t pageCo
 
     unsigned long elapsed = millis() - writeStart;
     iso14443a_->mifareHalt();
+    tagSessionActive_ = false;  // halted — readers/writers must reactivate (readback verify relies on this)
     Serial.printf("HardwareNFC: writeISO14443Pages - wrote %d pages starting at page %d (%lums, %d retries)\n",
                   pageCount, startPage, elapsed, retryCount);
     return true;

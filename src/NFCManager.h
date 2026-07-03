@@ -142,6 +142,9 @@ private:
     bool validateWriteUid(const char* expectedUid, const char* writeType);
     bool checkWriteCapacity(uint8_t startPage, uint8_t pageCount, const char* writeType);
     bool executeTigerTagWrite(const NFCWriteRequest& request);
+    bool verifyISO14443Readback(uint8_t startPage, uint8_t pageCount, const uint8_t* expected);
+    bool tigertagVerifyAndFinish(const NFCWriteRequest& request, const char* how);
+    bool ndefVerifyAndFinish(const char* what, uint8_t pagesNeeded, const uint8_t* ndefBuf, uint16_t ndefLen);
     bool executeOpenTag3DWrite(const NFCWriteRequest& request);
     bool executeOpenSpoolWrite(const NFCWriteRequest& request);
     bool executeAtomicWrite(const NFCWriteRequest& request);
