@@ -366,6 +366,7 @@ bool HardwareNFCConnection::writeISO14443Pages(uint8_t startPage, uint8_t pageCo
             Serial.println("HardwareNFC: writeISO14443Pages - tag reactivation failed");
             return false;
         }
+        tagSessionActive_ = true;
     }
 
     // Write per-page with retry: ISO14443A tags lose activation after errors; retry with re-activate
@@ -389,6 +390,7 @@ bool HardwareNFCConnection::writeISO14443Pages(uint8_t startPage, uint8_t pageCo
                 retryCount++;
                 Serial.printf("HardwareNFC: writeISO14443Pages - retry %d for page %d\n", retry + 1, page);
                 iso14443a_->mifareHalt();
+                tagSessionActive_ = false;
                 delay(10);  // RF settle time before re-activate
                 iso14443a_->setupRF();
                 uidLen = iso14443a_->activateTypeA(response, 1);
@@ -396,6 +398,7 @@ bool HardwareNFCConnection::writeISO14443Pages(uint8_t startPage, uint8_t pageCo
                     Serial.printf("HardwareNFC: writeISO14443Pages - re-activation failed on retry %d\n", retry + 1);
                     continue;
                 }
+                tagSessionActive_ = true;
                 pageOk = iso14443a_->mifareBlockWrite4(page, data + (i * 4));
             }
 
@@ -404,6 +407,7 @@ bool HardwareNFCConnection::writeISO14443Pages(uint8_t startPage, uint8_t pageCo
                 Serial.printf("HardwareNFC: writeISO14443Pages - FAILED at page %d after retries (%lums, %d retries total)\n",
                               page, elapsed, retryCount);
                 iso14443a_->mifareHalt();
+                tagSessionActive_ = false;
                 return false;  // total write failure; clean exit for caller to retry entire sequence
             }
         }
@@ -411,6 +415,7 @@ bool HardwareNFCConnection::writeISO14443Pages(uint8_t startPage, uint8_t pageCo
 
     unsigned long elapsed = millis() - writeStart;
     iso14443a_->mifareHalt();
+    tagSessionActive_ = false;  // halted — readers/writers must reactivate (readback verify relies on this)
     Serial.printf("HardwareNFC: writeISO14443Pages - wrote %d pages starting at page %d (%lums, %d retries)\n",
                   pageCount, startPage, elapsed, retryCount);
     return true;

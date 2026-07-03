@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- **Tag writes verified by readback** — TigerTag, OpenTag3D, and OpenSpool writes re-read the written pages and compare against the intended data after every reported success. A mismatch triggers one full-rewrite recovery, then fails loudly instead of reporting success on a corrupted write. Matters more now that the ACK fix is nibble-permissive: the 4-bit ACK carries no CRC, so a noise byte can read as success. (#167)
+
 ### Fixed
 
 - **PN5180 tag writes failing at marginal coupling** — three compounding bugs (#212): the 4-bit NTAG write ACK was exact-matched against `0x0A` so real ACKs with undefined upper bits (e.g. `0x2A`) were treated as failures; `mifareHalt()` left the transceiver parked in WaitReceive, wedging the state machine when the retry path reconfigured RF mid-transceive (`sendData state=3/0` errors); and the retry ladder tore down a still-ACTIVE session instead of simply resending the write. Multi-page writes that previously spiraled for 20+ seconds and failed now complete. (#212, reported in #194)
