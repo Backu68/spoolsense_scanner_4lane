@@ -1,4 +1,5 @@
 #include "LCDManager.h"
+#include "MemoryDiagnostics.h"
 #include <Arduino.h>
 #include <cstring>
 
@@ -114,6 +115,7 @@ void LCDManager::taskFunc(void* param) {
 void LCDManager::taskLoop() {
     while (true) {
         processQueue();
+        MemoryDiagnostics::reportSelf(MemoryDiagnostics::Task::LCD);
         vTaskDelay(pdMS_TO_TICKS(50));  // 20 Hz update rate (sufficient for human-readable display)
     }
 }

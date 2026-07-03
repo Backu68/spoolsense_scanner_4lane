@@ -5,6 +5,9 @@
 #include "NFCTypes.h"
 #include <Arduino.h>
 #include <cstring>
+#ifndef NATIVE_TEST
+#include "MemoryDiagnostics.h"
+#endif
 
 extern "C" {
 #include "openprinttag_lib.h"
@@ -63,6 +66,9 @@ void PrinterManager::pollingTaskFunc(void* param) {
 
     while (true) {
         self->poll();
+#ifndef NATIVE_TEST
+        MemoryDiagnostics::reportSelf(MemoryDiagnostics::Task::PrinterPoll);
+#endif
         vTaskDelay(pdMS_TO_TICKS(config.getPollIntervalMs()));
     }
 }
