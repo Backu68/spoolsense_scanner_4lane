@@ -58,6 +58,12 @@ public:
     // Set before write flow starts; consumed on first tag sync within PENDING_LINK_TIMEOUT_MS.
     void setPendingLink(int32_t spoolId);
 
+    // Streaming nfc_id → spool id lookup (no spool-count cap, archived spools
+    // excluded). Does NOT take the HTTP mutex — the caller must already hold the
+    // shared g_httpMutex. Returns id >= 0 on match, -1 not found, -2 lookup
+    // failed (transport/parse) — callers must not create on -2.
+    int findSpoolIdByUidNoLock(const char* uid);
+
     // Deduct weight directly in Spoolman for non-writable tags.
     // Returns grams deducted, or 0 on failure (caller should retry later).
     float deductFromSpoolman(const char* uid, float grams);

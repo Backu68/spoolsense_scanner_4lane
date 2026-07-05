@@ -414,8 +414,15 @@ void WebServerManager::handleApiRegisterUid() {
 
     float existingInitialWeight = 0.0f;
     String linkExtraJson, linkFilMaterial, linkFilColor;
-    int spoolId = enrichFindSpoolByUid(client, http, baseUrl, quotedUid, existingInitialWeight, linkExtraJson,
+    int spoolId = enrichFindSpoolByUid(client, http, baseUrl, uid, existingInitialWeight, linkExtraJson,
                                        linkFilMaterial, linkFilColor);
+    if (spoolId == -2) {
+        // Lookup failed (transport/parse) — creating here would duplicate an
+        // existing spool we simply couldn't see (#218 family)
+        xSemaphoreGive(g_httpMutex);
+        sendError(503, "Spoolman lookup failed — try again");
+        return;
+    }
 
     if (spoolId > 0) {
         // Spool exists — update it instead of creating a duplicate
@@ -2040,42 +2047,48 @@ int WebServerManager::enrichFindOrCreateFilament(WiFiClient& client, HTTPClient&
 
 // Fetch all spools and match nfc_id client-side — Spoolman's extra_field filter is unreliable
 int WebServerManager::enrichFindSpoolByUid(WiFiClient& client, HTTPClient& http,
-                                            const char* baseUrl, const char* quotedUid, float& outInitialWeight,
+                                            const char* baseUrl, const char* uid, float& outInitialWeight,
                                             String& outExtraJson, String& outFilamentMaterial,
                                             String& outFilamentColor) {
-    char url[256];
-    snprintf(url, sizeof(url), "%s/api/v1/spool?limit=200", baseUrl);
-    http.begin(client, url);
-    http.setTimeout(5000);
-    int code = http.GET();
-    int spoolId = -1;
     outInitialWeight = 0.0f;
     outExtraJson = "";
     outFilamentMaterial = "";
     outFilamentColor = "";
-    if (code == 200) {
-        String response = http.getString();
-        DynamicJsonDocument sDoc(16384);
-        if (!deserializeJson(sDoc, response)) {
-            JsonArray arr = sDoc.as<JsonArray>();
-            for (size_t i = 0; i < arr.size(); i++) {
-                const char* nfcId = arr[i]["extra"]["nfc_id"] | "";
-                if (strcmp(nfcId, quotedUid) != 0) continue;
-                if (arr[i]["archived"] | false) continue;
-                spoolId = arr[i]["id"] | -1;
-                outInitialWeight = arr[i]["initial_weight"] | 0.0f;
-                // Current filament identity — lets the caller skip re-pointing
-                // filament_id when the resolved filament is semantically the same (#218)
-                outFilamentMaterial = (const char*)(arr[i]["filament"]["material"] | "");
-                outFilamentColor    = (const char*)(arr[i]["filament"]["color_hex"] | "");
-                // Capture existing extras — Spoolman PATCH replaces the whole
-                // extra map, so any update that touches extras must merge
-                serializeJson(arr[i]["extra"], outExtraJson);
-                break;
-            }
-        }
+
+    // Two-step lookup (memory phase 2): the old path fetched the entire spool
+    // list into a 16KB DOM and was capped at 200 spools. The streaming search
+    // finds the id with bounded memory and no count cap; then one single-spool
+    // GET (~1KB) supplies the fields. Caller holds g_httpMutex, which the
+    // NoLock search requires.
+    // Return contract: id >= 0 found; -1 no active spool (creating is correct);
+    // -2 lookup failed (transient) — callers must abort, NOT create (#218 family)
+    int spoolId = SpoolmanManager::getInstance().findSpoolIdByUidNoLock(uid);
+    if (spoolId < 0) return spoolId;
+
+    char url[256];
+    snprintf(url, sizeof(url), "%s/api/v1/spool/%d", baseUrl, spoolId);
+    http.begin(client, url);
+    http.setTimeout(5000);
+    int code = http.GET();
+    if (code != 200) {
+        http.end();
+        return -2;
     }
+    String response = http.getString();
     http.end();
+
+    DynamicJsonDocument sDoc(3072);
+    if (deserializeJson(sDoc, response)) return -2;
+    if (sDoc["archived"] | false) return -1;  // search excludes archived, but a race is possible
+
+    outInitialWeight = sDoc["initial_weight"] | 0.0f;
+    // Current filament identity — lets the caller skip re-pointing filament_id
+    // when the resolved filament is semantically the same (#218)
+    outFilamentMaterial = (const char*)(sDoc["filament"]["material"] | "");
+    outFilamentColor    = (const char*)(sDoc["filament"]["color_hex"] | "");
+    // Capture existing extras — Spoolman PATCH replaces the whole extra map,
+    // so any update that touches extras must merge
+    serializeJson(sDoc["extra"], outExtraJson);
     return spoolId;
 }
 
@@ -2238,8 +2251,15 @@ void WebServerManager::handleApiSpoolmanSaveEnrichment() {
     snprintf(quotedUid, sizeof(quotedUid), "\"%s\"", uid);
     float existingInitialWeight = 0.0f;
     String existingExtraJson, existingFilMaterial, existingFilColor;
-    int spoolId = enrichFindSpoolByUid(client, http, baseUrl, quotedUid, existingInitialWeight, existingExtraJson,
+    int spoolId = enrichFindSpoolByUid(client, http, baseUrl, uid, existingInitialWeight, existingExtraJson,
                                        existingFilMaterial, existingFilColor);
+    if (spoolId == -2) {
+        // Lookup failed (transport/parse) — creating here would duplicate an
+        // existing spool we simply couldn't see (#218 family)
+        xSemaphoreGive(g_httpMutex);
+        _server.send(503, "application/json", "{\"error\":\"Spoolman lookup failed — try again\"}");
+        return;
+    }
 
     if (spoolId > 0) {
         // Don't re-point the spool's filament when its current one already matches

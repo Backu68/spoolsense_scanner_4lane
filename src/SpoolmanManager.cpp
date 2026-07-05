@@ -1399,6 +1399,12 @@ void SpoolmanManager::setPendingLink(int32_t spoolId) {
     Serial.printf("SpoolmanManager: Pending link set for spool %d\n", spoolId);
 }
 
+int SpoolmanManager::findSpoolIdByUidNoLock(const char* uid) {
+    // Pass -2 (transport/parse failure) through unchanged: callers must NOT
+    // treat a failed lookup as not-found, or transient errors create duplicates
+    return streamFindSpoolByNfcId("/api/v1/spool", uid);
+}
+
 float SpoolmanManager::deductFromSpoolman(const char* uid, float grams) {
     if (!isConfigured()) return 0.0f;
     if (xSemaphoreTake(httpMutex_, HTTP_MUTEX_TIMEOUT) != pdTRUE) {
