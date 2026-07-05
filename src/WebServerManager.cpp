@@ -657,6 +657,20 @@ void WebServerManager::handleApiDiagnostics() {
     HomeAssistantManager::getDeviceId(deviceId, sizeof(deviceId));
     doc["device_id"] = deviceId;
     doc["firmware_version"] = FIRMWARE_VERSION;
+    // Answers "was that reboot a crash or a power blip?" remotely — the RAM log
+    // buffer dies with the reboot, this survives as long as the board is up
+    switch (esp_reset_reason()) {
+        case ESP_RST_POWERON:   doc["reset_reason"] = "poweron"; break;
+        case ESP_RST_SW:        doc["reset_reason"] = "software"; break;
+        case ESP_RST_PANIC:     doc["reset_reason"] = "panic"; break;
+        case ESP_RST_INT_WDT:   doc["reset_reason"] = "int_wdt"; break;
+        case ESP_RST_TASK_WDT:  doc["reset_reason"] = "task_wdt"; break;
+        case ESP_RST_WDT:       doc["reset_reason"] = "wdt"; break;
+        case ESP_RST_BROWNOUT:  doc["reset_reason"] = "brownout"; break;
+        case ESP_RST_DEEPSLEEP: doc["reset_reason"] = "deepsleep"; break;
+        case ESP_RST_EXT:       doc["reset_reason"] = "external"; break;
+        default:                doc["reset_reason"] = "unknown"; break;
+    }
 
     // WiFi
     JsonObject wifi = doc.createNestedObject("wifi");
