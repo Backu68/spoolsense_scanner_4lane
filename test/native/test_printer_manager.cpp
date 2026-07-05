@@ -14,6 +14,13 @@
 // Define header guards BEFORE including production code — stubs replace real headers.
 // When PrinterManager.cpp includes ConfigurationManager.h, the guard is already set,
 // so the real header is skipped and the stub below is used instead.
+//
+// KNOWN LIMITATION: the stubbed contracts (AppMessage, AppMessageType, the manager
+// APIs below) are local copies. If the production versions drift, this test still
+// compiles against the copies and can false-pass. When changing AppMessage or the
+// ApplicationManager/NFCManager surfaces PrinterManager uses, update these stubs
+// in the same commit. (Real types with no heavy deps — NFCTypes.h — are included
+// directly instead of copied.)
 #define CONFIGURATION_MANAGER_H
 #define APPLICATION_MANAGER_H
 #define NFC_MANAGER_H

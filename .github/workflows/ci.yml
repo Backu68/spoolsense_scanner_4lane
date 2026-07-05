@@ -33,9 +33,9 @@ jobs:
           path: |
             ~/.platformio
             ~/.cache/pip
-          key: pio-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
+          key: pio-${{ runner.os }}-py3.11-pio6.1.19-${{ hashFiles('platformio.ini') }}
       - name: Install PlatformIO
-        run: pip install platformio
+        run: pip install platformio==6.1.19
       - name: Provide UserConfig
         run: cp include/UserConfig.example.h include/UserConfig.h
       - name: Build
