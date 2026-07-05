@@ -99,7 +99,9 @@ private:
     SemaphoreHandle_t cacheMutex_ = nullptr;
 
     static constexpr size_t QUEUE_SIZE = 4;
-    static constexpr size_t TASK_STACK_SIZE = 6144;
+    // 8192: measured HWM floor at 6144 was ~1.7KB during sync (HTTPClient→lwIP
+    // depth under syncSpool), and a stack canary panic confirmed it (#218 bench)
+    static constexpr size_t TASK_STACK_SIZE = 8192;
     static constexpr UBaseType_t TASK_PRIORITY = 1;
     static constexpr TickType_t HTTP_MUTEX_TIMEOUT = pdMS_TO_TICKS(10000);
     static constexpr uint32_t SYNC_CACHE_TTL_MS = 2 * 60 * 60 * 1000;  // 2 hours
