@@ -9,6 +9,7 @@
   #include "HardwareNFCConnection.h"
   #include "SpoolmanManager.h"
   #include "LogBuffer.h"
+  #include "MemoryDiagnostics.h"
   #include <Arduino.h>
 #else
   #include "platform/NativePlatform.h"
@@ -605,6 +606,7 @@ void NFCManager::scanLoop() {
     while (true) {
 #ifndef NATIVE_TEST
         esp_task_wdt_reset();
+        MemoryDiagnostics::reportSelf(MemoryDiagnostics::Task::NFCScan);
 #endif
         uint8_t uid[8];
         uint8_t uidLength = 0;

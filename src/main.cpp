@@ -9,6 +9,7 @@
 #include "NFCManager.h"
 #include "SpoolmanManager.h"
 #include "HomeAssistantManager.h"
+#include "MemoryDiagnostics.h"
 #include "DisplayI.h"
 #include "LCDManager.h"
 #include "TFTManager.h"
@@ -435,6 +436,14 @@ void loop() {
 
   // Fallback: retry NTP sync if boot-time attempt failed (non-blocking 30s interval)
   retryNTP();
+
+  // Heap + per-task stack high-water-mark baseline (60s interval, phase 1 memory work)
+  MemoryDiagnostics::reportSelf(MemoryDiagnostics::Task::Loop);
+  static unsigned long lastMemLog = 0;
+  if (millis() - lastMemLog >= 60000) {
+    lastMemLog = millis();
+    MemoryDiagnostics::logStats();
+  }
 
   // NFC scanning and other async work delegated to FreeRTOS tasks — 10ms soft delay prevents loop busywaiting
   delay(10);

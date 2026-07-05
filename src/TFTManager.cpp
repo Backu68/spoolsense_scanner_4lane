@@ -1,5 +1,6 @@
 #include "TFTManager.h"
 #include "ConfigurationManager.h"
+#include "MemoryDiagnostics.h"
 #include <Arduino.h>
 
 // TFT display controller for 240x240 ST7789 or GC9A01 (round). Manages sprite rendering to PSRAM
@@ -223,6 +224,7 @@ void TFTManager::taskFunc(void* param) {
 void TFTManager::taskLoop() {
     while (true) {
         processQueue();
+        MemoryDiagnostics::reportSelf(MemoryDiagnostics::Task::TFT);
         vTaskDelay(pdMS_TO_TICKS(20));  // 50 Hz update rate; allows other tasks to run between renders
     }
 }

@@ -1,6 +1,7 @@
 #include "SpoolmanManager.h"
 #include "ConfigurationManager.h"
 #include "ApplicationManager.h"
+#include "MemoryDiagnostics.h"
 #include <HTTPClient.h>
 #include <WiFiClient.h>
 #include <ArduinoJson.h>
@@ -1181,6 +1182,7 @@ void SpoolmanManager::taskLoop() {
     SpoolmanSyncRequest req;
     while (true) {
         if (xQueueReceive(syncQueue, &req, portMAX_DELAY) == pdTRUE) {
+            MemoryDiagnostics::reportSelf(MemoryDiagnostics::Task::SpoolmanSync);
             if (!isConfigured()) {
                 continue;
             }

@@ -10,6 +10,7 @@
 
 #ifndef NATIVE_TEST
 #include <Arduino.h>
+#include "MemoryDiagnostics.h"
 #endif
 
 #ifndef M_PI
@@ -310,6 +311,7 @@ void LEDManager::ledTaskLoop() {
 
         // Wait for setTarget/requestFlash notification OR 10ms tick for breathing animation
         ulTaskNotifyTake(pdTRUE, isBreathing ? pdMS_TO_TICKS(10) : portMAX_DELAY);
+        MemoryDiagnostics::reportSelf(MemoryDiagnostics::Task::LED);
 
         // Snapshot state from shared members (protected by mutex)
         xSemaphoreTake(_mutex, portMAX_DELAY);

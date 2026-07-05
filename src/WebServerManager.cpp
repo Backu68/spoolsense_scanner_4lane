@@ -9,6 +9,7 @@
 #include <HTTPClient.h>
 #include <WiFiClientSecure.h>
 
+#include "MemoryDiagnostics.h"
 #include "LandingHTML.h"
 #include "OpenPrintTagWriterHTML.h"
 #include "ReaderHTML.h"
@@ -640,7 +641,8 @@ void WebServerManager::handleApiSpoolmanPendingLink() {
 void WebServerManager::handleApiDiagnostics() {
     _server.sendHeader("Access-Control-Allow-Origin", "*");
 
-    StaticJsonDocument<1024> doc;
+    // 1536: task stack-hwm entries added on top of the original 1024 payload
+    StaticJsonDocument<1536> doc;
 
     // Device ID
     char deviceId[8];
@@ -708,7 +710,22 @@ void WebServerManager::handleApiDiagnostics() {
     memory["total_bytes"]     = totalHeap;
     memory["used_bytes"]      = totalHeap - freeHeap;
     memory["largest_block"]   = (uint32_t)ESP.getMaxAllocHeap();
+    memory["min_free_bytes"]  = (uint32_t)ESP.getMinFreeHeap();
+    memory["internal_free_bytes"]     = (uint32_t)heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    memory["internal_min_free_bytes"] = (uint32_t)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    memory["internal_largest_block"]  = (uint32_t)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     memory["uptime_s"]        = (uint32_t)(millis() / 1000);
+
+    JsonObject stacks = memory.createNestedObject("stack_hwm_bytes");
+    MemoryDiagnostics::TaskStackStat stats[MemoryDiagnostics::MAX_TRACKED];
+    size_t statCount = MemoryDiagnostics::collect(stats, MemoryDiagnostics::MAX_TRACKED);
+    for (size_t i = 0; i < statCount; i++) {
+        stacks[stats[i].name] = stats[i].stackHighWaterBytes;
+    }
+
+    if (doc.overflowed()) {
+        LogBuffer::getInstance().logPrintf("WebServer: diagnostics JSON truncated — grow doc capacity\n");
+    }
 
     String out;
     serializeJson(doc, out);
