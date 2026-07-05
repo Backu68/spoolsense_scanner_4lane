@@ -132,6 +132,11 @@ inline BaseType_t xTaskCreatePinnedToCore(
     (void)priority; (void)handle; (void)core;
     return pdPASS;
 }
+inline BaseType_t xTaskCreate(
+    void (*taskFunc)(void*), const char* name, uint32_t stackSize,
+    void* param, UBaseType_t priority, TaskHandle_t* handle) {
+    return xTaskCreatePinnedToCore(taskFunc, name, stackSize, param, priority, handle, 0);
+}
 
 // FreeRTOS queue peek
 inline BaseType_t xQueuePeek(QueueHandle_t queue, void* item, TickType_t wait) {

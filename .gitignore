@@ -2,7 +2,11 @@
 .vscode/
 include/UserConfig.h
 serial.log
-test/
+# test build artifacts (sources are tracked)
+test/native/*.o
+test/native/test_printer_manager
+test/native/*.dSYM/
+test/build/
 tools/
 esp32-planning.md
 docs/*-preview.html
