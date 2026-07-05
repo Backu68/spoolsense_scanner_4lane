@@ -332,7 +332,7 @@ static const char* materialTypeToSpoolmanStr(uint8_t type) {
 // Bump the version constant when adding new required fields.
 // ---------------------------------------------------------------------------
 
-static constexpr uint8_t SPOOLMAN_FIELDS_VERSION = 1;
+static constexpr uint8_t SPOOLMAN_FIELDS_VERSION = 2;  // v2: added spool nfc_link (#218 durable links)
 static const char* NVS_KEY_FIELDS_V = "sp_fields_v";
 
 struct ExtraFieldDef {
@@ -348,6 +348,7 @@ static const ExtraFieldDef REQUIRED_EXTRA_FIELDS[] = {
     {"spool",    "nfc_id",          "nfc_id"},
     {"spool",    "tag_format",      "Tag Format"},
     {"spool",    "active_toolhead", "active_toolhead"},
+    {"spool",    "nfc_link",        "nfc_link"},
 };
 static constexpr size_t NUM_REQUIRED_FIELDS = sizeof(REQUIRED_EXTRA_FIELDS) / sizeof(REQUIRED_EXTRA_FIELDS[0]);
 
@@ -855,6 +856,7 @@ static void clearNfcIdFromOtherSpools(const char* uuid, int keepSpoolId) {
             patchExtra[kv.key()] = kv.value();
         }
         patchExtra["nfc_id"] = "\"\"";
+        patchExtra["nfc_link"] = "\"\"";  // unstamp: the durable link moved with the tag
         if (patchDoc.overflowed()) {
             Serial.printf("SpoolmanManager: Spool %d extras too large to merge — skipping nfc_id clear\n", id);
             continue;
@@ -914,10 +916,21 @@ static SpoolReconcileAction reconcileSpool(int existingSpoolId, int newFilamentI
     int code = httpGet(path, response);
     if (code != 200) return SpoolReconcileAction::KeepSpool;
 
-    // Parse with enough capacity for the nested filament object
-    StaticJsonDocument<1024> doc;
+    // Heap doc: needs capacity for the nested filament object + extras, and
+    // SpoolmanSync's measured stack floor is under 2KB. Overflow fails to
+    // KeepSpool (never archives on unparseable data).
+    DynamicJsonDocument doc(3072);
     DeserializationError err = deserializeJson(doc, response);
     if (err) return SpoolReconcileAction::KeepSpool;
+
+    // A user-linked spool (writer picker / explicit re-link) is pinned: never
+    // auto-archived or re-pointed, weight still syncs. The tag's identity fields
+    // are stale by definition once a user overrides them (#218).
+    const char* linkMark = doc["extra"]["nfc_link"] | "";
+    if (strstr(linkMark, "user") != nullptr) {
+        Serial.printf("SpoolmanManager: Spool %d is user-linked — keeping\n", existingSpoolId);
+        return SpoolReconcileAction::KeepSpoolWeightOnly;
+    }
 
     int oldFilamentId = doc["filament"]["id"] | -1;
     bool idDiffersButSameFilament = false;
@@ -1469,12 +1482,43 @@ bool SpoolmanManager::syncSpool(const SpoolmanSyncRequest& req, int& resolvedSpo
     if (linkSpoolId > 0) {
         uint32_t age = millis() - linkSetAt;
         if (age < PENDING_LINK_TIMEOUT_MS) {
-            char patchBody[64];
-            snprintf(patchBody, sizeof(patchBody), "{\"extra\":{\"nfc_id\":\"\\\"%s\\\"\"}}", req.spool_id);
             char patchPath[48];
             snprintf(patchPath, sizeof(patchPath), "/api/v1/spool/%d", linkSpoolId);
+
+            // Read-merge-write: PATCHing extra replaces the whole map, so carry the
+            // spool's existing extras (tag_format, middleware fields) along with the
+            // new nfc_id and the durable user-link stamp. Heap docs deliberately —
+            // SpoolmanSync's measured stack floor is under 2KB.
+            // 4096: a failed parse here would skip the merge and the PATCH would
+            // wipe the spool's other extras — size generously (heap, transient)
+            DynamicJsonDocument spoolDoc(4096);
+            DynamicJsonDocument patchDoc(1024);
+            JsonObject patchExtra = patchDoc.createNestedObject("extra");
+            {
+                String spoolResp;
+                if (httpGet(patchPath, spoolResp) == 200) {
+                    DeserializationError mergeErr = deserializeJson(spoolDoc, spoolResp);
+                    if (mergeErr == DeserializationError::Ok) {
+                        for (JsonPair kv : spoolDoc["extra"].as<JsonObject>()) {
+                            patchExtra[kv.key()] = kv.value();
+                        }
+                    } else {
+                        Serial.printf("SpoolmanManager: Link merge parse failed (%s) — spool %d extras may be replaced\n",
+                                      mergeErr.c_str(), linkSpoolId);
+                    }
+                }
+            }
+            char quotedUid[130];
+            snprintf(quotedUid, sizeof(quotedUid), "\"%s\"", req.spool_id);
+            patchExtra["nfc_id"] = quotedUid;
+            // Durable link (#218): a user-linked spool is never auto-archived or
+            // re-pointed by sync; identity changes require another explicit link
+            patchExtra["nfc_link"] = "\"user\"";
+
+            String patchBody;
+            serializeJson(patchDoc, patchBody);
             String patchResp;
-            int patchCode = httpPatch(patchPath, patchBody, patchResp);
+            int patchCode = httpPatch(patchPath, patchBody.c_str(), patchResp);
             if (patchCode == 200) {
                 storeCachedSpoolmanId(req.spool_id, linkSpoolId);
                 justLinkedSpoolId = linkSpoolId;
