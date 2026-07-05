@@ -10,6 +10,7 @@
 
 ### Fixed
 
+- **Spool archive/recreate churn on sync** — three interacting defects (#218): the re-tag check archived spools whenever the resolved filament *id* differed, but dedup can resolve the same physical filament to a different id (user-named filaments, enrichment-created variants, tag formats that coerce the brand — TigerTag has no custom vendors). Explicitly picked spools (writer picker → pending link) were archived seconds after linking. Now: archive only on a real material/color change, a just-picked spool is never archived or re-pointed, filament dedup falls back to material+color when the name doesn't match, and the enrichment save searches for an existing filament even when the vendor is unknown instead of creating vendorless duplicates. Repro'd against a clean Spoolman v0.23.1: 3 seeded spools became 7 spools + 8 filaments in three writes; after the fix the same flow reuses the picked spools.
 - **PN5180 tag writes failing at marginal coupling** — three compounding bugs (#212): the 4-bit NTAG write ACK was exact-matched against `0x0A` so real ACKs with undefined upper bits (e.g. `0x2A`) were treated as failures; `mifareHalt()` left the transceiver parked in WaitReceive, wedging the state machine when the retry path reconfigured RF mid-transceive (`sendData state=3/0` errors); and the retry ladder tore down a still-ACTIVE session instead of simply resending the write. Multi-page writes that previously spiraled for 20+ seconds and failed now complete. (#212, reported in #194)
 
 ## [1.7.6] - 2026-07-02

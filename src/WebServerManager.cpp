@@ -413,8 +413,9 @@ void WebServerManager::handleApiRegisterUid() {
     snprintf(quotedUid, sizeof(quotedUid), "\"%s\"", uid);
 
     float existingInitialWeight = 0.0f;
-    String linkExtraJson;
-    int spoolId = enrichFindSpoolByUid(client, http, baseUrl, quotedUid, existingInitialWeight, linkExtraJson);
+    String linkExtraJson, linkFilMaterial, linkFilColor;
+    int spoolId = enrichFindSpoolByUid(client, http, baseUrl, quotedUid, existingInitialWeight, linkExtraJson,
+                                       linkFilMaterial, linkFilColor);
 
     if (spoolId > 0) {
         // Spool exists — update it instead of creating a duplicate
@@ -1907,30 +1908,36 @@ void WebServerManager::handleApiSpoolmanFindFilament() {
 // confirmedId: -1 = search needed, -2 = user declined match, >0 = already confirmed
 int WebServerManager::enrichFindOrCreateVendor(WiFiClient& client, HTTPClient& http,
                                                 const char* baseUrl, const char* manufacturer, int confirmedId) {
-    if (confirmedId != -1 || manufacturer[0] == '\0') return confirmedId;
+    // confirmedId >= 0: user confirmed an existing vendor. -2: user explicitly
+    // declined the suggested match — skip the search and create fresh (#218).
+    // -1: no confirmation dialog happened — search then create.
+    if (confirmedId >= 0 || manufacturer[0] == '\0') return (confirmedId >= 0) ? confirmedId : -1;
+    bool declinedMatch = (confirmedId == -2);
 
     char url[256];
-    String encodedMfg = urlEncode(manufacturer);
-    snprintf(url, sizeof(url), "%s/api/v1/vendor?name=%s", baseUrl, encodedMfg.c_str());
-    http.begin(client, url);
-    http.setTimeout(5000);
-    int code = http.GET();
     int vendorId = -1;
-    if (code == 200) {
-        String response = http.getString();
-        DynamicJsonDocument vDoc(2048);
-        if (!deserializeJson(vDoc, response)) {
-            for (JsonObject v : vDoc.as<JsonArray>()) {
-                if (strcasecmp(v["name"] | "", manufacturer) == 0) {
-                    vendorId = v["id"] | -1;
-                    break;
+    if (!declinedMatch) {
+        String encodedMfg = urlEncode(manufacturer);
+        snprintf(url, sizeof(url), "%s/api/v1/vendor?name=%s", baseUrl, encodedMfg.c_str());
+        http.begin(client, url);
+        http.setTimeout(5000);
+        int code = http.GET();
+        if (code == 200) {
+            String response = http.getString();
+            DynamicJsonDocument vDoc(2048);
+            if (!deserializeJson(vDoc, response)) {
+                for (JsonObject v : vDoc.as<JsonArray>()) {
+                    if (strcasecmp(v["name"] | "", manufacturer) == 0) {
+                        vendorId = v["id"] | -1;
+                        break;
+                    }
                 }
             }
         }
-    }
-    http.end();
+        http.end();
 
-    if (vendorId >= 0) return vendorId;
+        if (vendorId >= 0) return vendorId;
+    }
 
     StaticJsonDocument<128> vBody;
     vBody["name"] = manufacturer;
@@ -1940,7 +1947,7 @@ int WebServerManager::enrichFindOrCreateVendor(WiFiClient& client, HTTPClient& h
     http.begin(client, url);
     http.setTimeout(5000);
     http.addHeader("Content-Type", "application/json");
-    code = http.POST(vJson);
+    int code = http.POST(vJson);
     if (code == 200 || code == 201) {
         String response = http.getString();
         StaticJsonDocument<256> vResp;
@@ -1956,14 +1963,24 @@ int WebServerManager::enrichFindOrCreateFilament(WiFiClient& client, HTTPClient&
                                                    const char* baseUrl, const char* material, const char* colorHex,
                                                    int vendorId, float density, float diameter,
                                                    int bedTemp, int nozzleTemp, int confirmedId) {
-    if (confirmedId != -1 || material[0] == '\0') return confirmedId;
+    // confirmedId >= 0: user confirmed an existing filament. -2: user explicitly
+    // declined the suggested match — skip the search and create fresh (#218).
+    // -1: no confirmation dialog happened — search then create.
+    if (confirmedId >= 0 || material[0] == '\0') return (confirmedId >= 0) ? confirmedId : -1;
+    bool declinedMatch = (confirmedId == -2);
 
     char url[256];
     int filamentId = -1;
 
-    // Search existing filaments by vendor — client-side match (#92)
-    if (vendorId > 0) {
-        snprintf(url, sizeof(url), "%s/api/v1/filament?vendor_id=%d", baseUrl, vendorId);
+    // Search existing filaments — client-side match (#92). When the vendor is
+    // unknown, search unfiltered rather than skipping: blind-creating here made
+    // vendorless duplicates that ping-ponged with the sync path (#218).
+    if (!declinedMatch) {
+        if (vendorId > 0) {
+            snprintf(url, sizeof(url), "%s/api/v1/filament?vendor_id=%d", baseUrl, vendorId);
+        } else {
+            snprintf(url, sizeof(url), "%s/api/v1/filament", baseUrl);
+        }
         http.begin(client, url);
         http.setTimeout(5000);
         int code = http.GET();
@@ -1978,7 +1995,8 @@ int WebServerManager::enrichFindOrCreateFilament(WiFiClient& client, HTTPClient&
                     if (colorHex[0] != '\0') {
                         const char* fc = f["color_hex"] | "";
                         if (fc[0] == '#') fc++;
-                        if (strcasecmp(fc, colorCmp) != 0) continue;
+                        // RGB-only compare — Spoolman color_hex may carry an alpha suffix
+                        if (strlen(fc) < 6 || strncasecmp(fc, colorCmp, 6) != 0) continue;
                     }
                     filamentId = f["id"] | -1;
                     break;
@@ -1986,9 +2004,9 @@ int WebServerManager::enrichFindOrCreateFilament(WiFiClient& client, HTTPClient&
             }
         }
         http.end();
-    }
 
-    if (filamentId >= 0) return filamentId;
+        if (filamentId >= 0) return filamentId;
+    }
 
     // Create new filament
     StaticJsonDocument<512> fBody;
@@ -2023,7 +2041,8 @@ int WebServerManager::enrichFindOrCreateFilament(WiFiClient& client, HTTPClient&
 // Fetch all spools and match nfc_id client-side — Spoolman's extra_field filter is unreliable
 int WebServerManager::enrichFindSpoolByUid(WiFiClient& client, HTTPClient& http,
                                             const char* baseUrl, const char* quotedUid, float& outInitialWeight,
-                                            String& outExtraJson) {
+                                            String& outExtraJson, String& outFilamentMaterial,
+                                            String& outFilamentColor) {
     char url[256];
     snprintf(url, sizeof(url), "%s/api/v1/spool?limit=200", baseUrl);
     http.begin(client, url);
@@ -2032,6 +2051,8 @@ int WebServerManager::enrichFindSpoolByUid(WiFiClient& client, HTTPClient& http,
     int spoolId = -1;
     outInitialWeight = 0.0f;
     outExtraJson = "";
+    outFilamentMaterial = "";
+    outFilamentColor = "";
     if (code == 200) {
         String response = http.getString();
         DynamicJsonDocument sDoc(16384);
@@ -2043,6 +2064,10 @@ int WebServerManager::enrichFindSpoolByUid(WiFiClient& client, HTTPClient& http,
                 if (arr[i]["archived"] | false) continue;
                 spoolId = arr[i]["id"] | -1;
                 outInitialWeight = arr[i]["initial_weight"] | 0.0f;
+                // Current filament identity — lets the caller skip re-pointing
+                // filament_id when the resolved filament is semantically the same (#218)
+                outFilamentMaterial = (const char*)(arr[i]["filament"]["material"] | "");
+                outFilamentColor    = (const char*)(arr[i]["filament"]["color_hex"] | "");
                 // Capture existing extras — Spoolman PATCH replaces the whole
                 // extra map, so any update that touches extras must merge
                 serializeJson(arr[i]["extra"], outExtraJson);
@@ -2060,7 +2085,11 @@ bool WebServerManager::enrichUpdateSpool(WiFiClient& client, HTTPClient& http, c
                                            const char* existingExtraJson, const char* tagFormat) {
     char url[256];
     StaticJsonDocument<512> patch;
-    patch["filament_id"] = filamentId;
+    // filamentId < 0 means "leave the spool's filament alone" — the caller
+    // determined the resolved filament is semantically the same (#218)
+    if (filamentId >= 0) {
+        patch["filament_id"] = filamentId;
+    }
 
     // Only touch extras when writing tag_format. Spoolman PATCH replaces the
     // entire extra map, so the existing extras (nfc_id, middleware fields like
@@ -2208,11 +2237,29 @@ void WebServerManager::handleApiSpoolmanSaveEnrichment() {
     char quotedUid[130];
     snprintf(quotedUid, sizeof(quotedUid), "\"%s\"", uid);
     float existingInitialWeight = 0.0f;
-    String existingExtraJson;
-    int spoolId = enrichFindSpoolByUid(client, http, baseUrl, quotedUid, existingInitialWeight, existingExtraJson);
+    String existingExtraJson, existingFilMaterial, existingFilColor;
+    int spoolId = enrichFindSpoolByUid(client, http, baseUrl, quotedUid, existingInitialWeight, existingExtraJson,
+                                       existingFilMaterial, existingFilColor);
 
     if (spoolId > 0) {
-        if (!enrichUpdateSpool(client, http, baseUrl, spoolId, filamentId, remainingG, existingInitialWeight,
+        // Don't re-point the spool's filament when its current one already matches
+        // the requested material+color — dedup can resolve a different id for the
+        // same physical filament, and re-pointing churns with the sync path (#218)
+        int patchFilamentId = filamentId;
+        {
+            const char* ec = existingFilColor.c_str();
+            if (ec[0] == '#') ec++;
+            const char* rc = colorHex;
+            if (rc[0] == '#') rc++;
+            bool sameMaterial = existingFilMaterial.length() > 0 &&
+                                strcasecmp(existingFilMaterial.c_str(), material) == 0;
+            bool sameColor = (rc[0] == '\0') ||
+                             (strlen(ec) >= 6 && strncasecmp(ec, rc, 6) == 0);
+            if (sameMaterial && sameColor) {
+                patchFilamentId = -1;
+            }
+        }
+        if (!enrichUpdateSpool(client, http, baseUrl, spoolId, patchFilamentId, remainingG, existingInitialWeight,
                                existingExtraJson.c_str(), tagFormat)) {
             xSemaphoreGive(g_httpMutex);
             _server.send(500, "application/json", "{\"error\":\"spool update failed\"}");
