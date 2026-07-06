@@ -1134,6 +1134,14 @@ static bool updateSpool(int spoolId, int filamentId, float remainingWeight) {
         doc["filament_id"] = filamentId;
     }
 
+    // Weightless tag + weight-only action = nothing to send. Spoolman rejects
+    // an empty PATCH with 422, and the failed sync would retry every detect
+    // cycle (found on bench: user-linked OpenSpool tag with no weight data).
+    if (doc.size() == 0) {
+        Serial.printf("SpoolmanManager: Spool %d — nothing to update, skipping PATCH\n", spoolId);
+        return true;
+    }
+
     String body;
     serializeJson(doc, body);
 
