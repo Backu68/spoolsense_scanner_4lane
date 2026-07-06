@@ -111,9 +111,10 @@ private:
     SemaphoreHandle_t cacheMutex_ = nullptr;
 
     static constexpr size_t QUEUE_SIZE = 4;
-    // 8192: measured HWM floor at 6144 was ~1.7KB during sync (HTTPClient→lwIP
-    // depth under syncSpool), and a stack canary panic confirmed it (#218 bench)
-    static constexpr size_t TASK_STACK_SIZE = 8192;
+    // 10240: the streaming matchers put a ~1.1KB json_reader in the sync call
+    // tree — measured HWM floor dropped to 1232 free of 8192 on bench (phase 2
+    // slice 3). Prior history: canary panic at 6144, ~1.7KB floor at 8192.
+    static constexpr size_t TASK_STACK_SIZE = 10240;
     static constexpr UBaseType_t TASK_PRIORITY = 1;
     static constexpr TickType_t HTTP_MUTEX_TIMEOUT = pdMS_TO_TICKS(10000);
     static constexpr uint32_t SYNC_CACHE_TTL_MS = 2 * 60 * 60 * 1000;  // 2 hours
