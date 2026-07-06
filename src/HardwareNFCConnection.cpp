@@ -177,6 +177,7 @@ bool HardwareNFCConnection::hardwareReset() {
     digitalWrite(PIN_PN5180_RST, LOW);
     delay(10);
     digitalWrite(PIN_PN5180_RST, HIGH);
+    PN5180::clearBusWedged();  // fresh chip — release the fail-fast latch
 
     // Wait for BUSY to go LOW with timeout
     unsigned long start = millis();

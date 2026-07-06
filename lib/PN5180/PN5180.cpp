@@ -541,7 +541,20 @@ status register contain information on the exception.
  * 5. Wait until BUSY is low
  * If there is a parameter error, the IRQ is set to ACTIVE and a GENERAL_ERROR_IRQ is set.
  */
+// Once a BUSY handshake times out, the PN5180 state machine is wedged and
+// every further transaction will also grind to its full timeout. detectTag
+// chains 15-20 transactions, so grinding turns one scan iteration into 30s+
+// and starves the scan task's watchdog (bench 2026-07-06). Fail everything
+// fast instead until a hardware reset clears the flag — recovery then happens
+// within one 50ms scan cycle.
+static volatile bool pn5180_busWedged = false;
+
+void PN5180::clearBusWedged() {
+  pn5180_busWedged = false;
+}
+
 bool PN5180::transceiveCommand(uint8_t *sendBuffer, size_t sendBufferLen, uint8_t *recvBuffer, size_t recvBufferLen) {
+  if (pn5180_busWedged) return false;
 #ifdef DEBUG
   PN5180DEBUG(F("Sending SPI frame: '"));
   for (uint8_t i=0; i<sendBufferLen; i++) {
@@ -557,6 +570,7 @@ bool PN5180::transceiveCommand(uint8_t *sendBuffer, size_t sendBufferLen, uint8_
     while (LOW != digitalRead(PN5180_BUSY)) { // wait until busy is low
       if (millis() - t > 1000) {
         Serial.println("PN5180: TIMEOUT BUSY-LOW pre-send");
+        pn5180_busWedged = true;
         return false;
       }
     }
@@ -574,6 +588,7 @@ bool PN5180::transceiveCommand(uint8_t *sendBuffer, size_t sendBufferLen, uint8_
       if (millis() - t > 1000) {
         Serial.println("PN5180: TIMEOUT BUSY-HIGH post-send");
         digitalWrite(PN5180_NSS, HIGH);
+        pn5180_busWedged = true;
         return false;
       }
     }
@@ -586,6 +601,7 @@ bool PN5180::transceiveCommand(uint8_t *sendBuffer, size_t sendBufferLen, uint8_
     while (LOW != digitalRead(PN5180_BUSY)) { // wait until BUSY is low
       if (millis() - t > 1000) {
         Serial.println("PN5180: TIMEOUT BUSY-LOW post-send");
+        pn5180_busWedged = true;
         return false;
       }
     }
@@ -608,6 +624,7 @@ bool PN5180::transceiveCommand(uint8_t *sendBuffer, size_t sendBufferLen, uint8_
     while(HIGH != digitalRead(PN5180_BUSY)) {  // wait until BUSY is high
       if (millis() - t > 1000) {
         Serial.println("PN5180: TIMEOUT BUSY-HIGH post-recv");
+        pn5180_busWedged = true;
         digitalWrite(PN5180_NSS, HIGH);
         return false;
       }
@@ -621,6 +638,7 @@ bool PN5180::transceiveCommand(uint8_t *sendBuffer, size_t sendBufferLen, uint8_
     while(LOW != digitalRead(PN5180_BUSY)) {  // wait until BUSY is low
       if (millis() - t > 1000) {
         Serial.println("PN5180: TIMEOUT BUSY-LOW post-recv");
+        pn5180_busWedged = true;
         return false;
       }
     }
@@ -646,6 +664,7 @@ bool PN5180::reset() {
   delay(10);
   digitalWrite(PN5180_RST, HIGH); // 2ms to ramp up required
   delay(10);
+  clearBusWedged();  // fresh chip state — allow transactions again
 
   unsigned long t = millis();
   while (0 == (IDLE_IRQ_STAT & getIRQStatus())) { // wait for system to start up
