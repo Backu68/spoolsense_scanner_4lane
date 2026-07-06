@@ -1618,12 +1618,14 @@ bool SpoolmanManager::lookupSpoolByUid(const char* uid, SpoolDetails& outDetails
         return false;
     }
 
-    int spoolmanId = streamFindSpoolByNfcId("/api/v1/spool", uid);
-    if (spoolmanId < 0) {
-        Serial.printf("SpoolmanManager: UID lookup — no match for uid=%s\n", uid);
+    SpoolResolution r = resolveSpoolByUidNoLock(uid);
+    if (r.spoolId < 0) {
+        Serial.printf("SpoolmanManager: UID lookup — no match for uid=%s%s\n",
+                      uid, r.lookupFailed ? " (lookup failed)" : "");
         xSemaphoreGive(httpMutex_);
         return false;
     }
+    int spoolmanId = r.spoolId;
 
     bool ok = getSpoolDetails(spoolmanId, outDetails);
     xSemaphoreGive(httpMutex_);
@@ -1652,6 +1654,105 @@ int SpoolmanManager::findVendorNoLock(const char* name, char* outName, size_t ou
     return streamFindVendorByName(name, outName, outNameSize);
 }
 
+bool SpoolmanManager::fetchSpoolCore(int32_t spoolId, SpoolCore& out) {
+    char path[64];
+    snprintf(path, sizeof(path), "/api/v1/spool/%ld", (long)spoolId);
+    String resp;
+    int code = httpGet(path, resp);
+    if (code == 404) {
+        // Definitively gone — callers treat as unusable candidate, not failure
+        out = SpoolCore{};
+        out.archived = true;
+        return true;
+    }
+    if (code != 200) return false;
+
+    DynamicJsonDocument doc(3072);
+    if (deserializeJson(doc, resp) != DeserializationError::Ok) return false;
+
+    out.archived = doc["archived"] | false;
+    out.filamentId = doc["filament"]["id"] | -1;
+    const char* link = doc["extra"]["nfc_link"] | "";
+    out.userLinked = (strstr(link, "user") != nullptr);
+    const char* nfc = doc["extra"]["nfc_id"] | "";
+    strncpy(out.nfcId, nfc, sizeof(out.nfcId) - 1);
+    out.nfcId[sizeof(out.nfcId) - 1] = '\0';
+    return true;
+}
+
+// A candidate spool (from tag id or cache) is usable for this tag only if it
+// still exists, is unarchived, and its stored nfc_id is empty or this tag's —
+// a spool already claimed by a DIFFERENT tag means the reference is stale.
+bool SpoolmanManager::spoolUsableForUid(const SpoolCore& core, const char* uid) {
+    if (core.archived) return false;
+    if (core.nfcId[0] == '\0') return true;
+    char quoted[44];
+    snprintf(quoted, sizeof(quoted), "\"%s\"", uid);
+    return strcasecmp(core.nfcId, uid) == 0 || strcasecmp(core.nfcId, quoted) == 0;
+}
+
+SpoolmanManager::SpoolResolution SpoolmanManager::resolveSpoolByUidNoLock(const char* uid, int32_t tagSpoolmanId) {
+    SpoolResolution res;
+    if (uid == nullptr || uid[0] == '\0') return res;
+
+    // 1. Global nfc_id match — the tag's durable identity in Spoolman
+    int byNfc = streamFindSpoolByNfcId("/api/v1/spool", uid);
+    if (byNfc == -2) {
+        res.lookupFailed = true;
+        return res;
+    }
+    if (byNfc >= 0) {
+        res.spoolId = byNfc;
+        res.source = SpoolResolution::Source::NfcId;
+        SpoolCore core;
+        if (fetchSpoolCore(byNfc, core)) {
+            res.filamentId = core.filamentId;
+            res.userLinked = core.userLinked;
+        }
+        storeCachedSpoolmanId(uid, byNfc);
+        return res;
+    }
+
+    // 2. Tag-stored spoolman_id — validated, never trusted blindly
+    if (tagSpoolmanId > 0) {
+        SpoolCore core;
+        if (!fetchSpoolCore(tagSpoolmanId, core)) {
+            res.lookupFailed = true;
+            return res;
+        }
+        if (spoolUsableForUid(core, uid)) {
+            res.spoolId = tagSpoolmanId;
+            res.filamentId = core.filamentId;
+            res.userLinked = core.userLinked;
+            res.source = SpoolResolution::Source::TagId;
+            storeCachedSpoolmanId(uid, tagSpoolmanId);
+            return res;
+        }
+        Serial.printf("SpoolmanManager: tag spoolman_id=%ld stale for uid=%s — ignoring\n",
+                      (long)tagSpoolmanId, uid);
+    }
+
+    // 3. Cached uid→id — validated; the resolver is the single eviction point
+    int32_t cached = lookupCachedSpoolmanId(uid);
+    if (cached > 0 && cached != tagSpoolmanId) {
+        SpoolCore core;
+        if (!fetchSpoolCore(cached, core)) {
+            res.lookupFailed = true;
+            return res;
+        }
+        if (spoolUsableForUid(core, uid)) {
+            res.spoolId = cached;
+            res.filamentId = core.filamentId;
+            res.userLinked = core.userLinked;
+            res.source = SpoolResolution::Source::Cache;
+            return res;
+        }
+        invalidateCachedSpoolmanId(uid);
+    }
+
+    return res;  // clean not-found: creation is allowed
+}
+
 int SpoolmanManager::findSpoolIdByUidNoLock(const char* uid) {
     // Pass -2 (transport/parse failure) through unchanged: callers must NOT
     // treat a failed lookup as not-found, or transient errors create duplicates
@@ -1665,12 +1766,14 @@ float SpoolmanManager::deductFromSpoolman(const char* uid, float grams) {
         return 0.0f;
     }
 
-    int spoolId = findSpoolByUuidGlobal(uid);
-    if (spoolId < 0) {
-        Serial.printf("SpoolmanManager: deductFromSpoolman — spool not found for %s\n", uid);
+    SpoolResolution r = resolveSpoolByUidNoLock(uid);
+    if (r.spoolId < 0) {
+        Serial.printf("SpoolmanManager: deductFromSpoolman — spool not found for %s%s\n",
+                      uid, r.lookupFailed ? " (lookup failed, retry later)" : "");
         xSemaphoreGive(httpMutex_);
         return 0.0f;
     }
+    int spoolId = r.spoolId;
 
     // Get current remaining weight
     char path[64];
