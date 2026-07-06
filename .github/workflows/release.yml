@@ -117,4 +117,18 @@ jobs:
             --arg url "https://github.com/SpoolSense/spoolsense_scanner/releases/tag/$RELEASE_TAG" \
             --arg desc "${CHANGELOG_BODY:0:4000}" \
             '{embeds: [{title: $title, url: $url, description: $desc, color: 3447003}]}')
-          curl -s -H "Content-Type: application/json" -d "$PAYLOAD" "$DISCORD_WEBHOOK"
+          # Discord returns 204 on success; on 429 it sends retry_after. The
+          # v1.8.0 announcement was silently dropped by a 0.3s rate limit —
+          # retry with backoff and fail the step loudly if it never lands.
+          for attempt in 1 2 3 4 5; do
+            HTTP_CODE=$(curl -s -o /tmp/discord_resp -w "%{http_code}"               -H "Content-Type: application/json" -d "$PAYLOAD" "$DISCORD_WEBHOOK")
+            if [ "$HTTP_CODE" = "204" ] || [ "$HTTP_CODE" = "200" ]; then
+              echo "Discord notified (HTTP $HTTP_CODE, attempt $attempt)"
+              exit 0
+            fi
+            echo "Discord attempt $attempt failed (HTTP $HTTP_CODE): $(cat /tmp/discord_resp)"
+            RETRY_AFTER=$(jq -r '.retry_after // 2' /tmp/discord_resp 2>/dev/null || echo 2)
+            sleep "$(python3 -c "print(min(float('$RETRY_AFTER') + $attempt, 30))")"
+          done
+          echo "::error::Discord notification failed after 5 attempts"
+          exit 1
