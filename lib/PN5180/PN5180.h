@@ -145,6 +145,10 @@ public:
   /*
    * Private methods, called within an SPI transaction
    */
+public:
+  // Clear the bus-wedged fail-fast latch after a hardware reset
+  static void clearBusWedged();
+
 private:
   bool transceiveCommand(uint8_t *sendBuffer, size_t sendBufferLen, uint8_t *recvBuffer = 0, size_t recvBufferLen = 0);
 

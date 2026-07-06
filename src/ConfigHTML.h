@@ -233,6 +233,12 @@ const char CONFIG_HTML[] PROGMEM = R"rawliteral(
                 </label>
               </div>
               <div class="toggle-row">
+                <span id="led_pin_label" class="toggle-label">Status LED Pin</span>
+                <input id="led_pin" type="number" min="0" max="48" placeholder="empty = board default"
+                       aria-labelledby="led_pin_label"
+                       style="width:150px;padding:6px 10px;border-radius:6px;border:1px solid var(--border);background:var(--card);color:var(--text);font-size:0.95em" />
+              </div>
+              <div class="toggle-row">
                 <span id="keypad_enabled_label" class="toggle-label">3x4 Matrix Keypad</span>
                 <label class="toggle-switch">
                   <input type="checkbox" id="keypad_enabled" aria-labelledby="keypad_enabled_label" />
@@ -309,6 +315,7 @@ const char CONFIG_HTML[] PROGMEM = R"rawliteral(
       document.getElementById('prusalink_fields').style.display = cfg.prusalink_on ? '' : 'none';
       document.getElementById('lcd_enabled').checked = !!cfg.lcd_enabled;
       document.getElementById('led_enabled').checked = !!cfg.led_enabled;
+      if (cfg.led_pin !== undefined && cfg.led_pin !== '') document.getElementById('led_pin').value = cfg.led_pin;
       document.getElementById('keypad_enabled').checked = !!cfg.keypad_enabled;
       document.getElementById('tft_enabled').checked = !!cfg.tft_enabled;
       if (cfg.tft_driver) document.getElementById('tft_driver').value = cfg.tft_driver;
@@ -389,6 +396,7 @@ const char CONFIG_HTML[] PROGMEM = R"rawliteral(
         auto_mode: parseInt(document.getElementById('auto_mode').value) || 0,
         lcd_enabled: document.getElementById('lcd_enabled').checked ? 1 : 0,
         led_enabled: document.getElementById('led_enabled').checked ? 1 : 0,
+        led_pin: document.getElementById('led_pin').value.trim(),
         keypad_enabled: document.getElementById('keypad_enabled').checked ? 1 : 0,
         tft_enabled: document.getElementById('tft_enabled').checked ? 1 : 0,
         tft_driver: document.getElementById('tft_driver').value,

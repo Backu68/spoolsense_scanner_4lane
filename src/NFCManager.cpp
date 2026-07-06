@@ -1,4 +1,5 @@
 #include "NFCManager.h"
+#include <esp_system.h>
 #include "ConversionUtils.h"
 #include "TigerTagParser.h"
 #include "OpenSpoolParser.h"
@@ -9,6 +10,7 @@
   #include "HardwareNFCConnection.h"
   #include "SpoolmanManager.h"
   #include "LogBuffer.h"
+  #include "MemoryDiagnostics.h"
   #include <Arduino.h>
 #else
   #include "platform/NativePlatform.h"
@@ -192,11 +194,31 @@ void NFCManager::startScanTask() {
         1  // Run on core 1
     );
     Serial.println("NFCManager: Scan task started");
+    reportWdtPhaseIfCrashed();
 }
 
 void NFCManager::scanTaskFunc(void* param) {
     NFCManager* self = static_cast<NFCManager*>(param);
     self->scanLoop();
+}
+
+// ── Watchdog forensics ──────────────────────────────────────
+// Where exactly is the scan task when the 30s task watchdog kills it?
+// RTC-noinit survives the wdt reset, so the next boot reports the phase.
+RTC_NOINIT_ATTR volatile uint32_t g_nfcScanPhase;
+RTC_NOINIT_ATTR volatile uint32_t g_nfcScanPhasePage;
+#define SCAN_PHASE(n) (g_nfcScanPhase = (n))
+#define SCAN_PHASE_PAGE(p) (g_nfcScanPhasePage = (p))
+
+void NFCManager::reportWdtPhaseIfCrashed() {
+    if (esp_reset_reason() == ESP_RST_TASK_WDT) {
+        Serial.printf("NFCManager: PREVIOUS BOOT DIED IN SCAN PHASE %lu (page marker %lu)\n",
+                      (unsigned long)g_nfcScanPhase, (unsigned long)g_nfcScanPhasePage);
+        LogBuffer::getInstance().logPrintf("WDT death: scan phase %lu page %lu\n",
+                      (unsigned long)g_nfcScanPhase, (unsigned long)g_nfcScanPhasePage);
+    }
+    g_nfcScanPhase = 0;
+    g_nfcScanPhasePage = 0;
 }
 
 // ── NDEF helpers ────────────────────────────────────────────
@@ -307,7 +329,9 @@ void NFCManager::readAndProcessISO14443Tag(const uint8_t* uid, uint8_t uidLength
     memset(&ot3dData, 0, sizeof(ot3dData));
 
     uint8_t pageData[40] = {0};
+    SCAN_PHASE(20);
     uint16_t bytesRead = connection_->readISO14443Pages(4, 10, pageData, sizeof(pageData), true);
+    SCAN_PHASE(21);
 
     // Try TigerTag first (binary magic at offset 0)
     if (bytesRead >= 14 && tigerTagCheckMagic(pageData, bytesRead)) {
@@ -326,6 +350,7 @@ void NFCManager::readAndProcessISO14443Tag(const uint8_t* uid, uint8_t uidLength
             const char* ot3dMime = OT3D_MIME_TYPE;
             if (rec.mimeLen == strlen(ot3dMime) && memcmp(rec.mimeType, ot3dMime, rec.mimeLen) == 0) {
                 uint8_t payload[OT3D_EXTENDED_MIN];
+                SCAN_PHASE(22);
                 uint16_t payloadBytes = readNdefPayload(rec, pageData, bytesRead, payload, sizeof(payload));
                 if (payloadBytes >= OT3D_CORE_SIZE) {
                     opentag3d_result_t res = opentag3d_decode(payload, payloadBytes, &ot3dData);
@@ -346,6 +371,7 @@ void NFCManager::readAndProcessISO14443Tag(const uint8_t* uid, uint8_t uidLength
                 const char* jsonMime = "application/json";
                 if (rec.mimeLen == strlen(jsonMime) && memcmp(rec.mimeType, jsonMime, rec.mimeLen) == 0) {
                     uint8_t payload[256];
+                    SCAN_PHASE(23);
                     uint16_t payloadBytes = readNdefPayload(rec, pageData, bytesRead, payload, sizeof(payload));
                     if (payloadBytes > 0 && parseOpenSpool(payload, payloadBytes, openSpoolData)) {
                         isOpenSpool = true;
@@ -356,7 +382,9 @@ void NFCManager::readAndProcessISO14443Tag(const uint8_t* uid, uint8_t uidLength
     }
 
     // All reads done — halt tag if session is still active
+    SCAN_PHASE(24);
     connection_->endTagSession();
+    SCAN_PHASE(25);
 
     // Update shared state under mutex
     if (xSemaphoreTake(tagMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
@@ -482,9 +510,11 @@ bool NFCManager::isSkippableDuplicate(const uint8_t* uid, uint8_t uidLength) {
 
 void NFCManager::handleNewTag(uint8_t* uid, uint8_t uidLength) {
     Serial.println("NFCManager: New spool detected, reading tag...");
+    SCAN_PHASE(10);
     TagScanResult scan = classifyTag(uid, uidLength);
 
     if (scan.kind == TagKind::BambuTag) {
+        SCAN_PHASE(11);
         BambuTagData bambuData;
         bool readOk = readBambuTag(uid, uidLength, bambuData);
 
@@ -526,6 +556,7 @@ void NFCManager::handleNewTag(uint8_t* uid, uint8_t uidLength) {
 
     // ISO14443A: TigerTag, OpenTag3D, OpenSpool, or generic UID
     if (scan.kind == TagKind::GenericUidTag) {
+        SCAN_PHASE(12);
         readAndProcessISO14443Tag(uid, uidLength, scan);
         return;
     }
@@ -541,6 +572,7 @@ void NFCManager::handleNewTag(uint8_t* uid, uint8_t uidLength) {
             vTaskDelay(pdMS_TO_TICKS(100));  // let RF stabilize after reset
         }
         Serial.printf("NFCManager: readAndParseTag attempt %d\n", attempt + 1);
+        SCAN_PHASE(13);
         readOk = readAndParseTag(uid, uidLength);
         Serial.printf("NFCManager: readAndParseTag attempt %d: %s\n", attempt + 1, readOk ? "OK" : "FAILED");
     }
@@ -605,15 +637,19 @@ void NFCManager::scanLoop() {
     while (true) {
 #ifndef NATIVE_TEST
         esp_task_wdt_reset();
+        MemoryDiagnostics::reportSelf(MemoryDiagnostics::Task::NFCScan);
 #endif
+        SCAN_PHASE(1);
         uint8_t uid[8];
         uint8_t uidLength = 0;
 
+        SCAN_PHASE(2);
         if (!prepareRF()) {
             vTaskDelay(pdMS_TO_TICKS(50));
             continue;
         }
 
+        SCAN_PHASE(3);
         if (connection_->detectTag(uid, &uidLength)) {
             absentMisses_ = 0;
             if (!lastSeenValid || memcmp(uid, lastSeenUid, uidLength) != 0) {
@@ -624,14 +660,19 @@ void NFCManager::scanLoop() {
             }
             connection_->setCurrentUid(uid, uidLength);
 
+            SCAN_PHASE(4);
             if (!isSkippableDuplicate(uid, uidLength)) {
+                SCAN_PHASE(5);
                 handleNewTag(uid, uidLength);
             }
+            SCAN_PHASE(6);
             processWriteQueue();
         } else if (!lastSeenValid) {
             // Nothing was present — no debounce needed, keep state cleared
+            SCAN_PHASE(7);
             handleTagAbsent();
         } else if (++absentMisses_ >= TAG_ABSENT_MISS_THRESHOLD) {
+            SCAN_PHASE(8);
             // Debounce removal: single failed reads happen with stationary tags
             // (RF hiccups, marginal coupling). Only declare the tag gone after
             // several consecutive misses, or present/removed flaps every few
@@ -640,6 +681,7 @@ void NFCManager::scanLoop() {
             absentMisses_ = 0;
         }
 
+        SCAN_PHASE(9);
         vTaskDelay(pdMS_TO_TICKS(50));
     }
 }
@@ -1764,6 +1806,72 @@ bool NFCManager::checkWriteCapacity(uint8_t startPage, uint8_t pageCount, const 
     return true;
 }
 
+// Re-read a written region and compare — a tag can ACK a write that lands
+// corrupted at weak coupling, and the 4-bit ACK carries no CRC so a noise
+// byte can even read as success. Read goes straight to hardware (no cache on
+// the ISO14443 path). (#167)
+bool NFCManager::verifyISO14443Readback(uint8_t startPage, uint8_t pageCount, const uint8_t* expected) {
+    uint8_t readback[256];
+    uint16_t totalBytes = (uint16_t)pageCount * 4;
+    if (totalBytes > sizeof(readback)) return false;
+    uint16_t n = connection_->readISO14443Pages(startPage, pageCount, readback, sizeof(readback), false);
+    if (n < totalBytes) {
+        Serial.printf("NFCManager: verify read returned %u of %u bytes\n", n, totalBytes);
+        return false;
+    }
+    return memcmp(readback, expected, totalBytes) == 0;
+}
+
+// Shared verify + one-recovery tail for the NDEF writers (OpenTag3D, OpenSpool).
+bool NFCManager::ndefVerifyAndFinish(const char* what, uint8_t pagesNeeded,
+                                     const uint8_t* ndefBuf, uint16_t ndefLen) {
+    if (verifyISO14443Readback(4, pagesNeeded, ndefBuf)) {
+        Serial.printf("NFCManager: %s succeeded (%u bytes, %u pages, verified)\n", what, ndefLen, pagesNeeded);
+        LogBuffer::getInstance().logPrintf("Write %s: OK (%u bytes, verified)\n", what, ndefLen);
+        forceRescan();
+        return true;
+    }
+
+    Serial.printf("NFCManager: %s verify mismatch — rewrite retry\n", what);
+    LogBuffer::getInstance().logPrintf("Write %s: verify mismatch, rewriting\n", what);
+    if (connection_->writeISO14443Pages(4, pagesNeeded, ndefBuf, ndefLen)
+            && verifyISO14443Readback(4, pagesNeeded, ndefBuf)) {
+        Serial.printf("NFCManager: %s succeeded (recovery rewrite, verified)\n", what);
+        LogBuffer::getInstance().logPrintf("Write %s: OK (rewrite, verified)\n", what);
+        forceRescan();
+        return true;
+    }
+
+    Serial.printf("NFCManager: %s verify failed after rewrite\n", what);
+    LogBuffer::getInstance().logPrintf("Write %s: FAILED (verify)\n", what);
+    return false;
+}
+
+// Shared tail for every successful TigerTag write path: verify, recover once
+// with a full rewrite on mismatch, then fail loudly.
+bool NFCManager::tigertagVerifyAndFinish(const NFCWriteRequest& request, const char* how) {
+    if (verifyISO14443Readback(4, 10, request.data.tigertag_data)) {
+        Serial.printf("NFCManager: WRITE_TIGERTAG succeeded (%s, verified)\n", how);
+        LogBuffer::getInstance().logPrintf("Write TigerTag: OK (%s, verified)\n", how);
+        forceRescan();
+        return true;
+    }
+
+    Serial.println("NFCManager: WRITE_TIGERTAG verify mismatch — full rewrite retry");
+    LogBuffer::getInstance().logPrintf("Write TigerTag: verify mismatch, rewriting\n");
+    if (connection_->writeISO14443Pages(4, 10, request.data.tigertag_data, 40)
+            && verifyISO14443Readback(4, 10, request.data.tigertag_data)) {
+        Serial.println("NFCManager: WRITE_TIGERTAG succeeded (recovery rewrite, verified)");
+        LogBuffer::getInstance().logPrintf("Write TigerTag: OK (rewrite, verified)\n");
+        forceRescan();
+        return true;
+    }
+
+    Serial.println("NFCManager: WRITE_TIGERTAG verify failed after rewrite");
+    LogBuffer::getInstance().logPrintf("Write TigerTag: FAILED (verify)\n");
+    return false;
+}
+
 bool NFCManager::executeTigerTagWrite(const NFCWriteRequest& request) {
     if (!validateWriteUid(request.expected_spool_id, "WRITE_TIGERTAG")) return false;
     if (!checkWriteCapacity(4, 10, "WRITE_TIGERTAG")) return false;
@@ -1777,16 +1885,12 @@ bool NFCManager::executeTigerTagWrite(const NFCWriteRequest& request) {
         Serial.printf("NFCManager: WRITE_TIGERTAG pre-read returned %u bytes, falling back to full write\n",
                       bytesRead);
         LogBuffer::getInstance().logPrintf("Write TigerTag: pre-read failed, full write\n");
-        bool ok = connection_->writeISO14443Pages(4, 10, request.data.tigertag_data, 40);
-        if (ok) {
-            Serial.println("NFCManager: WRITE_TIGERTAG succeeded");
-            LogBuffer::getInstance().logPrintf("Write TigerTag: OK\n");
-            forceRescan();
-        } else {
+        if (!connection_->writeISO14443Pages(4, 10, request.data.tigertag_data, 40)) {
             Serial.println("NFCManager: WRITE_TIGERTAG failed");
             LogBuffer::getInstance().logPrintf("Write TigerTag: FAILED\n");
+            return false;
         }
-        return ok;
+        return tigertagVerifyAndFinish(request, "full write");
     }
 
     // Build contiguous runs of changed pages. 10 pages alternating → at most 5 runs.
@@ -1827,10 +1931,7 @@ bool NFCManager::executeTigerTagWrite(const NFCWriteRequest& request) {
                           r, run.startPage, run.pageCount);
             LogBuffer::getInstance().logPrintf("Write TigerTag: run failed, full rewrite\n");
             if (connection_->writeISO14443Pages(4, 10, request.data.tigertag_data, 40)) {
-                Serial.println("NFCManager: WRITE_TIGERTAG full rewrite succeeded");
-                LogBuffer::getInstance().logPrintf("Write TigerTag: OK (full rewrite)\n");
-                forceRescan();
-                return true;
+                return tigertagVerifyAndFinish(request, "full rewrite");
             }
             Serial.println("NFCManager: WRITE_TIGERTAG full rewrite failed");
             LogBuffer::getInstance().logPrintf("Write TigerTag: FAILED\n");
@@ -1840,10 +1941,7 @@ bool NFCManager::executeTigerTagWrite(const NFCWriteRequest& request) {
     }
 
     Serial.printf("NFCManager: WRITE_TIGERTAG wrote %u/10 pages in %u run(s)\n", totalPages, runCount);
-    LogBuffer::getInstance().logPrintf("Write TigerTag: OK (%u/10 pages, %u run%s)\n",
-                                       totalPages, runCount, runCount == 1 ? "" : "s");
-    forceRescan();
-    return true;
+    return tigertagVerifyAndFinish(request, "partial write");
 }
 
 bool NFCManager::executeOpenTag3DWrite(const NFCWriteRequest& request) {
@@ -1876,16 +1974,12 @@ bool NFCManager::executeOpenTag3DWrite(const NFCWriteRequest& request) {
     uint8_t pagesNeeded = (uint8_t)(ndefLen / 4);
     Serial.printf("NFCManager: WRITE_OPENTAG3D - writing %u bytes (%u pages)\n", ndefLen, pagesNeeded);
     if (!checkWriteCapacity(4, pagesNeeded, "WRITE_OPENTAG3D")) return false;
-    bool ok = connection_->writeISO14443Pages(4, pagesNeeded, ndefBuf, ndefLen);
-    if (ok) {
-        Serial.printf("NFCManager: WRITE_OPENTAG3D succeeded (%u bytes, %u pages)\n", ndefLen, pagesNeeded);
-        LogBuffer::getInstance().logPrintf("Write OpenTag3D: OK (%u bytes)\n", ndefLen);
-        forceRescan();
-    } else {
+    if (!connection_->writeISO14443Pages(4, pagesNeeded, ndefBuf, ndefLen)) {
         Serial.println("NFCManager: WRITE_OPENTAG3D failed");
         LogBuffer::getInstance().logPrintf("Write OpenTag3D: FAILED\n");
+        return false;
     }
-    return ok;
+    return ndefVerifyAndFinish("OpenTag3D", pagesNeeded, ndefBuf, ndefLen);
 }
 
 bool NFCManager::executeOpenSpoolWrite(const NFCWriteRequest& request) {
@@ -1910,16 +2004,12 @@ bool NFCManager::executeOpenSpoolWrite(const NFCWriteRequest& request) {
     uint8_t pagesNeeded = (uint8_t)(ndefLen / 4);
     Serial.printf("NFCManager: WRITE_OPENSPOOL - writing %u bytes (%u pages)\n", ndefLen, pagesNeeded);
     if (!checkWriteCapacity(4, pagesNeeded, "WRITE_OPENSPOOL")) return false;
-    bool ok = connection_->writeISO14443Pages(4, pagesNeeded, ndefBuf, ndefLen);
-    if (ok) {
-        Serial.printf("NFCManager: WRITE_OPENSPOOL succeeded (%u bytes, %u pages)\n", ndefLen, pagesNeeded);
-        LogBuffer::getInstance().logPrintf("Write OpenSpool: OK (%u bytes)\n", ndefLen);
-        forceRescan();
-    } else {
+    if (!connection_->writeISO14443Pages(4, pagesNeeded, ndefBuf, ndefLen)) {
         Serial.println("NFCManager: WRITE_OPENSPOOL failed");
         LogBuffer::getInstance().logPrintf("Write OpenSpool: FAILED\n");
+        return false;
     }
-    return ok;
+    return ndefVerifyAndFinish("OpenSpool", pagesNeeded, ndefBuf, ndefLen);
 }
 
 bool NFCManager::executeAtomicWrite(const NFCWriteRequest& request) {

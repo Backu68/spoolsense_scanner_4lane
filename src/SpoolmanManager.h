@@ -58,6 +58,24 @@ public:
     // Set before write flow starts; consumed on first tag sync within PENDING_LINK_TIMEOUT_MS.
     void setPendingLink(int32_t spoolId);
 
+    // Streaming nfc_id → spool id lookup (no spool-count cap, archived spools
+    // excluded). Does NOT take the HTTP mutex — the caller must already hold the
+    // shared g_httpMutex. Returns id >= 0 on match, -1 not found, -2 lookup
+    // failed (transport/parse) — callers must not create on -2.
+    int findSpoolIdByUidNoLock(const char* uid);
+
+    // Streaming vendor search by exact name (case-insensitive); canonical name
+    // copied to outName on match. Does NOT take the HTTP mutex — caller must
+    // hold g_httpMutex. Returns id >= 0, -1 not found, -2 lookup failed —
+    // callers must not create on -2.
+    int findVendorNoLock(const char* name, char* outName = nullptr, size_t outNameSize = 0);
+
+    // Streaming filament search (per-vendor when vendorId > 0, unfiltered
+    // otherwise); tiered match: exact material+color+name, else material+color.
+    // Does NOT take the HTTP mutex — caller must hold g_httpMutex. Returns
+    // id >= 0, -1 not found, -2 lookup failed — callers must not create on -2.
+    int findFilamentNoLock(int vendorId, const char* material, const char* colorHex6, const char* name);
+
     // Deduct weight directly in Spoolman for non-writable tags.
     // Returns grams deducted, or 0 on failure (caller should retry later).
     float deductFromSpoolman(const char* uid, float grams);
@@ -99,7 +117,10 @@ private:
     SemaphoreHandle_t cacheMutex_ = nullptr;
 
     static constexpr size_t QUEUE_SIZE = 4;
-    static constexpr size_t TASK_STACK_SIZE = 6144;
+    // 10240: the streaming matchers put a ~1.1KB json_reader in the sync call
+    // tree — measured HWM floor dropped to 1232 free of 8192 on bench (phase 2
+    // slice 3). Prior history: canary panic at 6144, ~1.7KB floor at 8192.
+    static constexpr size_t TASK_STACK_SIZE = 10240;
     static constexpr UBaseType_t TASK_PRIORITY = 1;
     static constexpr TickType_t HTTP_MUTEX_TIMEOUT = pdMS_TO_TICKS(10000);
     static constexpr uint32_t SYNC_CACHE_TTL_MS = 2 * 60 * 60 * 1000;  // 2 hours

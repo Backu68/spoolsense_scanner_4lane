@@ -10,6 +10,7 @@
 #include "TagStateJson.h"
 #include "LEDManager.h"
 #include "LogBuffer.h"
+#include "MemoryDiagnostics.h"
 #include "SpoolmanManager.h"
 #include "TrayDashboardTypes.h"
 
@@ -366,6 +367,7 @@ void HomeAssistantManager::taskLoop() {
             break;
         }
 
+        MemoryDiagnostics::reportSelf(MemoryDiagnostics::Task::HA);
         uint32_t now = millis();
 
         // Main loop: reconnect if needed, drain publish queue, process MQTT

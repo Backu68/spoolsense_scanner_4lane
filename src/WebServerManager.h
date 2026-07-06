@@ -105,7 +105,8 @@ private:
                                     const char* material, const char* colorHex, int vendorId,
                                     float density, float diameter, int bedTemp, int nozzleTemp, int confirmedId);
     int enrichFindSpoolByUid(WiFiClient& client, HTTPClient& http, const char* baseUrl,
-                              const char* quotedUid, float& outInitialWeight, String& outExtraJson);
+                              const char* uid, float& outInitialWeight, String& outExtraJson,
+                              String& outFilamentMaterial, String& outFilamentColor);
     bool enrichUpdateSpool(WiFiClient& client, HTTPClient& http, const char* baseUrl,
                             int spoolId, int filamentId, float remainingG, float existingInitialWeight,
                             const char* existingExtraJson, const char* tagFormat);

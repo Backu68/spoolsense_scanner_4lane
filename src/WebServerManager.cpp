@@ -9,6 +9,7 @@
 #include <HTTPClient.h>
 #include <WiFiClientSecure.h>
 
+#include "MemoryDiagnostics.h"
 #include "LandingHTML.h"
 #include "OpenPrintTagWriterHTML.h"
 #include "ReaderHTML.h"
@@ -166,15 +167,8 @@ bool WebServerManager::begin(bool apMode, uint16_t port) {
         });
     }
 
-    // Allow browser preflight requests (CORS) so the page can be tested
-    // from a local file during development.
     _server.onNotFound([this]() {
-        if (_server.method() == HTTP_OPTIONS) {
-            _server.sendHeader("Access-Control-Allow-Origin", "*");
-            _server.sendHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
-            _server.sendHeader("Access-Control-Allow-Headers", "Content-Type");
-            _server.send(204);
-        } else if (_apMode) {
+        if (_apMode) {
             // Captive portal: redirect unknown requests to config page
             _server.sendHeader("Location", "http://192.168.4.1/config");
             _server.send(302, "text/plain", "Redirecting to setup...");
@@ -200,43 +194,35 @@ void WebServerManager::handleClient() {
 // ---------------------------------------------------------------------------
 
 void WebServerManager::handleLanding() {
-    _server.sendHeader("Access-Control-Allow-Origin", "*");
     _server.send_P(200, "text/html", LANDING_HTML);
 }
 
 void WebServerManager::handleReader() {
-    _server.sendHeader("Access-Control-Allow-Origin", "*");
     _server.send_P(200, "text/html", READER_HTML);
 }
 
 void WebServerManager::handleOpenPrintTagWriter() {
-    _server.sendHeader("Access-Control-Allow-Origin", "*");
     _server.send_P(200, "text/html", OPENPRINTTAG_WRITER_HTML);
 }
 
 void WebServerManager::handleTigerTagWriter() {
-    _server.sendHeader("Access-Control-Allow-Origin", "*");
     _server.send_P(200, "text/html", TIGERTAG_WRITER_HTML);
 }
 
 void WebServerManager::handleOpenTag3DWriter() {
-    _server.sendHeader("Access-Control-Allow-Origin", "*");
     _server.send_P(200, "text/html", OPENTAG3D_WRITER_HTML);
 }
 
 void WebServerManager::handleOpenSpoolWriter() {
-    _server.sendHeader("Access-Control-Allow-Origin", "*");
     _server.send_P(200, "text/html", OPENSPOOL_WRITER_HTML);
 }
 
 void WebServerManager::handleSharedCSS() {
-    _server.sendHeader("Access-Control-Allow-Origin", "*");
     _server.sendHeader("Cache-Control", "no-store");
     _server.send_P(200, "text/css", SHARED_CSS);
 }
 
 void WebServerManager::handleSharedJS() {
-    _server.sendHeader("Access-Control-Allow-Origin", "*");
     _server.sendHeader("Cache-Control", "no-store");
     _server.send_P(200, "application/javascript", SHARED_JS);
 }
@@ -262,32 +248,26 @@ void WebServerManager::handleOpenSpoolLogo() {
 }
 
 void WebServerManager::handleUpdatePage() {
-    _server.sendHeader("Access-Control-Allow-Origin", "*");
     _server.send_P(200, "text/html", UPDATE_HTML);
 }
 
 void WebServerManager::handleConfigPage() {
-    _server.sendHeader("Access-Control-Allow-Origin", "*");
     _server.send_P(200, "text/html", CONFIG_HTML);
 }
 
 void WebServerManager::handleTroubleshootingPage() {
-    _server.sendHeader("Access-Control-Allow-Origin", "*");
     _server.send_P(200, "text/html", TROUBLESHOOTING_HTML);
 }
 
 void WebServerManager::handleUIDRegistrationPage() {
-    _server.sendHeader("Access-Control-Allow-Origin", "*");
     _server.send_P(200, "text/html", UID_REGISTRATION_HTML);
 }
 
 void WebServerManager::handleLogViewer() {
-    _server.sendHeader("Access-Control-Allow-Origin", "*");
     _server.send_P(200, "text/html", LOG_VIEWER_HTML);
 }
 
 void WebServerManager::handleApiLogs() {
-    _server.sendHeader("Access-Control-Allow-Origin", "*");
     char* buf = (char*)malloc(4097);
     if (!buf) {
         _server.send(500, "text/plain", "out of memory");
@@ -299,14 +279,12 @@ void WebServerManager::handleApiLogs() {
 }
 
 void WebServerManager::handleApiLogsClear() {
-    _server.sendHeader("Access-Control-Allow-Origin", "*");
     LogBuffer::getInstance().clear();
     _server.send(200, "application/json", "{\"success\":true}");
 }
 
 void WebServerManager::handleApiRegisterUid() {
     Serial.println("WebServerManager: POST /api/register-uid received");
-    _server.sendHeader("Access-Control-Allow-Origin", "*");
 
     StaticJsonDocument<1024> doc;
     DeserializationError err = deserializeJson(doc, _server.arg("plain"));
@@ -354,25 +332,13 @@ void WebServerManager::handleApiRegisterUid() {
     int code;
 
     // --- Step 1: Find or create vendor ---
-    int vendorId = -1;
-    String encodedMfg = urlEncode(manufacturer);
-    snprintf(url, sizeof(url), "%s/api/v1/vendor?name=%s", baseUrl, encodedMfg.c_str());
-    http.begin(client, url);
-    code = http.GET();
-    if (code == 200) {
-        response = http.getString();
-        StaticJsonDocument<2048> vendorDoc;
-        if (!deserializeJson(vendorDoc, response)) {
-            JsonArray arr = vendorDoc.as<JsonArray>();
-            for (JsonObject v : arr) {
-                if (strcasecmp(v["name"] | "", manufacturer) == 0) {
-                    vendorId = v["id"] | -1;
-                    break;
-                }
-            }
-        }
+    int vendorId = SpoolmanManager::getInstance().findVendorNoLock(manufacturer);
+    if (vendorId == -2) {
+        // Lookup failed — creating now could mint a duplicate vendor
+        xSemaphoreGive(g_httpMutex);
+        sendError(503, "Spoolman vendor lookup failed — try again");
+        return;
     }
-    http.end();
 
     if (vendorId < 0) {
         // Create vendor
@@ -412,8 +378,16 @@ void WebServerManager::handleApiRegisterUid() {
     snprintf(quotedUid, sizeof(quotedUid), "\"%s\"", uid);
 
     float existingInitialWeight = 0.0f;
-    String linkExtraJson;
-    int spoolId = enrichFindSpoolByUid(client, http, baseUrl, quotedUid, existingInitialWeight, linkExtraJson);
+    String linkExtraJson, linkFilMaterial, linkFilColor;
+    int spoolId = enrichFindSpoolByUid(client, http, baseUrl, uid, existingInitialWeight, linkExtraJson,
+                                       linkFilMaterial, linkFilColor);
+    if (spoolId == -2) {
+        // Lookup failed (transport/parse) — creating here would duplicate an
+        // existing spool we simply couldn't see (#218 family)
+        xSemaphoreGive(g_httpMutex);
+        sendError(503, "Spoolman lookup failed — try again");
+        return;
+    }
 
     if (spoolId > 0) {
         // Spool exists — update it instead of creating a duplicate
@@ -480,7 +454,6 @@ void WebServerManager::handleApiRegisterUid() {
 // ---------------------------------------------------------------------------
 
 void WebServerManager::handleApiSpoolmanSpools() {
-    _server.sendHeader("Access-Control-Allow-Origin", "*");
 
     const char* baseUrl = ConfigurationManager::getInstance().getSpoolmanURL();
     if (!baseUrl || strlen(baseUrl) == 0) {
@@ -498,6 +471,9 @@ void WebServerManager::handleApiSpoolmanSpools() {
     char url[256];
     snprintf(url, sizeof(url), "%s/api/v1/spool?archived=false", baseUrl);
     http.begin(client, url);
+    // HTTP/1.0 — the raw stream is relayed verbatim, so chunked framing from a
+    // reverse-proxied Spoolman would otherwise corrupt the JSON (c16bcfd rule)
+    http.useHTTP10(true);
     http.setTimeout(5000);
     int code = http.GET();
 
@@ -533,7 +509,6 @@ void WebServerManager::handleApiSpoolmanSpools() {
 }
 
 void WebServerManager::handleApiSpoolmanLink() {
-    _server.sendHeader("Access-Control-Allow-Origin", "*");
 
     StaticJsonDocument<256> doc;
     DeserializationError err = deserializeJson(doc, _server.arg("plain"));
@@ -618,7 +593,6 @@ void WebServerManager::handleApiSpoolmanLink() {
 }
 
 void WebServerManager::handleApiSpoolmanPendingLink() {
-    _server.sendHeader("Access-Control-Allow-Origin", "*");
 
     StaticJsonDocument<128> doc;
     if (deserializeJson(doc, _server.arg("plain"))) {
@@ -638,15 +612,29 @@ void WebServerManager::handleApiSpoolmanPendingLink() {
 }
 
 void WebServerManager::handleApiDiagnostics() {
-    _server.sendHeader("Access-Control-Allow-Origin", "*");
 
-    StaticJsonDocument<1024> doc;
+    // 1536: task stack-hwm entries added on top of the original 1024 payload
+    StaticJsonDocument<1536> doc;
 
     // Device ID
     char deviceId[8];
     HomeAssistantManager::getDeviceId(deviceId, sizeof(deviceId));
     doc["device_id"] = deviceId;
     doc["firmware_version"] = FIRMWARE_VERSION;
+    // Answers "was that reboot a crash or a power blip?" remotely — the RAM log
+    // buffer dies with the reboot, this survives as long as the board is up
+    switch (esp_reset_reason()) {
+        case ESP_RST_POWERON:   doc["reset_reason"] = "poweron"; break;
+        case ESP_RST_SW:        doc["reset_reason"] = "software"; break;
+        case ESP_RST_PANIC:     doc["reset_reason"] = "panic"; break;
+        case ESP_RST_INT_WDT:   doc["reset_reason"] = "int_wdt"; break;
+        case ESP_RST_TASK_WDT:  doc["reset_reason"] = "task_wdt"; break;
+        case ESP_RST_WDT:       doc["reset_reason"] = "wdt"; break;
+        case ESP_RST_BROWNOUT:  doc["reset_reason"] = "brownout"; break;
+        case ESP_RST_DEEPSLEEP: doc["reset_reason"] = "deepsleep"; break;
+        case ESP_RST_EXT:       doc["reset_reason"] = "external"; break;
+        default:                doc["reset_reason"] = "unknown"; break;
+    }
 
     // WiFi
     JsonObject wifi = doc.createNestedObject("wifi");
@@ -708,7 +696,22 @@ void WebServerManager::handleApiDiagnostics() {
     memory["total_bytes"]     = totalHeap;
     memory["used_bytes"]      = totalHeap - freeHeap;
     memory["largest_block"]   = (uint32_t)ESP.getMaxAllocHeap();
+    memory["min_free_bytes"]  = (uint32_t)ESP.getMinFreeHeap();
+    memory["internal_free_bytes"]     = (uint32_t)heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    memory["internal_min_free_bytes"] = (uint32_t)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    memory["internal_largest_block"]  = (uint32_t)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     memory["uptime_s"]        = (uint32_t)(millis() / 1000);
+
+    JsonObject stacks = memory.createNestedObject("stack_hwm_bytes");
+    MemoryDiagnostics::TaskStackStat stats[MemoryDiagnostics::MAX_TRACKED];
+    size_t statCount = MemoryDiagnostics::collect(stats, MemoryDiagnostics::MAX_TRACKED);
+    for (size_t i = 0; i < statCount; i++) {
+        stacks[stats[i].name] = stats[i].stackHighWaterBytes;
+    }
+
+    if (doc.overflowed()) {
+        LogBuffer::getInstance().logPrintf("WebServer: diagnostics JSON truncated — grow doc capacity\n");
+    }
 
     String out;
     serializeJson(doc, out);
@@ -720,12 +723,11 @@ void WebServerManager::handleApiDiagnostics() {
 // ---------------------------------------------------------------------------
 
 void WebServerManager::handleApiGetConfig() {
-    _server.sendHeader("Access-Control-Allow-Origin", "*");
 
     ConfigUpdate cfg;
     ConfigurationManager::getInstance().getCurrentConfig(cfg);
 
-    StaticJsonDocument<768> doc;
+    StaticJsonDocument<896> doc;
     doc["wifi_ssid"] = cfg.wifi_ssid;
     doc["wifi_pass_set"] = (cfg.wifi_pass[0] != '\0');
     doc["mqtt_host"] = cfg.mqtt_host;
@@ -749,6 +751,12 @@ void WebServerManager::handleApiGetConfig() {
     doc["wifi_keep_awake"] = cfg.wifi_keep_awake;
     doc["u1_enabled"] = cfg.u1_enabled;
     doc["u1_channel"] = cfg.u1_channel;
+    // led_pin: emit "" for the default sentinel so the web field shows empty
+    if (cfg.led_pin == LED_PIN_DEFAULT) {
+        doc["led_pin"] = "";
+    } else {
+        doc["led_pin"] = cfg.led_pin;
+    }
     doc["tft_enabled"] = cfg.tft_enabled;
     doc["tft_driver"] = cfg.tft_driver;
     doc["ap_mode"] = _apMode;
@@ -763,7 +771,6 @@ void WebServerManager::handleApiGetConfig() {
 }
 
 void WebServerManager::handleApiPostConfig() {
-    _server.sendHeader("Access-Control-Allow-Origin", "*");
 
     StaticJsonDocument<1024> doc;
     DeserializationError err = deserializeJson(doc, _server.arg("plain"));
@@ -813,6 +820,21 @@ void WebServerManager::handleApiPostConfig() {
         uint8_t ch = doc["u1_channel"] | (uint8_t)0;
         update.u1_channel = (ch <= 3) ? ch : 0;  // clamp invalid client input
     }
+    {
+        // Sent as a string so empty (= board default) is distinguishable from GPIO 0.
+        // Board-specific pin validation happens at the NVS boundary in saveToNVS.
+        const char* ledPinStr = doc["led_pin"] | "";
+        if (ledPinStr[0] == '\0') {
+            update.led_pin = LED_PIN_DEFAULT;
+        } else {
+            // Strict parse: the whole string must be numeric, else fall back to
+            // default — atoi("abc") would silently become GPIO 0.
+            char* end = nullptr;
+            long p = strtol(ledPinStr, &end, 10);
+            bool numeric = (end != ledPinStr) && (*end == '\0');
+            update.led_pin = (numeric && p >= 0 && p <= 254) ? (uint8_t)p : LED_PIN_DEFAULT;
+        }
+    }
 
     if (update.wifi_ssid[0] == '\0') {
         sendError(400, "WiFi SSID is required");
@@ -842,7 +864,6 @@ void WebServerManager::handleApiPostConfig() {
 // ---------------------------------------------------------------------------
 
 void WebServerManager::handleApiVersion() {
-    _server.sendHeader("Access-Control-Allow-Origin", "*");
     StaticJsonDocument<128> doc;
     doc["version"] = FIRMWARE_VERSION;
 #ifdef BOARD_ESP32_S3
@@ -887,7 +908,6 @@ void WebServerManager::handleApiUploadFirmwareChunk() {
 }
 
 void WebServerManager::handleApiUploadFirmwareComplete() {
-    _server.sendHeader("Access-Control-Allow-Origin", "*");
     if (Update.hasError()) {
         NFCManager::getInstance().resumeScanTask();
         _server.send(500, "application/json", "{\"success\":false,\"error\":\"Update failed\"}");
@@ -912,7 +932,6 @@ void WebServerManager::handleApiUploadFirmwareComplete() {
 // ---------------------------------------------------------------------------
 
 void WebServerManager::handleApiUpdateFromUrl() {
-    _server.sendHeader("Access-Control-Allow-Origin", "*");
 
     if (_otaState == OtaState::DOWNLOADING || _otaState == OtaState::FLASHING) {
         sendError(409, "Update already in progress");
@@ -929,6 +948,17 @@ void WebServerManager::handleApiUpdateFromUrl() {
     const char* url = doc["url"] | "";
     if (strlen(url) == 0) {
         sendError(400, "Missing url");
+        return;
+    }
+
+    // OTA is locked to this project's GitHub releases. The update page only
+    // ever posts browser_download_url values from the GitHub API, and the
+    // HTTPS redirect target (objects.githubusercontent.com) is chosen by
+    // GitHub, not the caller. Anything else gets rejected — without this,
+    // anyone on the LAN could flash arbitrary firmware by URL.
+    static const char OTA_ALLOWED_PREFIX[] = "https://github.com/SpoolSense/";
+    if (strncmp(url, OTA_ALLOWED_PREFIX, sizeof(OTA_ALLOWED_PREFIX) - 1) != 0) {
+        sendError(403, "OTA URL must be a SpoolSense GitHub release");
         return;
     }
 
@@ -1055,7 +1085,6 @@ void WebServerManager::otaDownloadTask(void* param) {
 }
 
 void WebServerManager::handleApiOtaStatus() {
-    _server.sendHeader("Access-Control-Allow-Origin", "*");
     StaticJsonDocument<128> doc;
 
     switch (_otaState) {
@@ -1265,7 +1294,6 @@ void WebServerManager::serializeEnrichment(JsonDocument& doc) {
 // ── /api/status ─────────────────────────────────────────────
 
 void WebServerManager::handleApiStatus() {
-    _server.sendHeader("Access-Control-Allow-Origin", "*");
 
     CurrentSpoolState state;
     StaticJsonDocument<1536> doc;
@@ -1313,7 +1341,6 @@ void WebServerManager::handleApiStatus() {
 
 void WebServerManager::handleApiWriteTag() {
     Serial.println("WebServerManager: POST /api/write-tag received");
-    _server.sendHeader("Access-Control-Allow-Origin", "*");
 
     StaticJsonDocument<512> doc;
     DeserializationError err = deserializeJson(doc, _server.arg("plain"));
@@ -1450,7 +1477,6 @@ void WebServerManager::handleApiWriteTag() {
 
 void WebServerManager::handleApiFormatTag() {
     Serial.println("WebServerManager: POST /api/format-tag received");
-    _server.sendHeader("Access-Control-Allow-Origin", "*");
 
     // Optional body: {"uid": "..."} to validate tag before formatting
     char uid[17] = {0};
@@ -1481,7 +1507,6 @@ void WebServerManager::handleApiFormatTag() {
 
 void WebServerManager::handleApiWriteTigerTag() {
     Serial.println("WebServerManager: POST /api/write-tigertag received");
-    _server.sendHeader("Access-Control-Allow-Origin", "*");
 
     StaticJsonDocument<256> doc;
     DeserializationError err = deserializeJson(doc, _server.arg("plain"));
@@ -1574,7 +1599,6 @@ void WebServerManager::handleApiWriteTigerTag() {
 
 void WebServerManager::handleApiWriteOpenTag3D() {
     Serial.println("WebServerManager: POST /api/write-opentag3d received");
-    _server.sendHeader("Access-Control-Allow-Origin", "*");
 
     StaticJsonDocument<512> doc;
     DeserializationError err = deserializeJson(doc, _server.arg("plain"));
@@ -1673,7 +1697,6 @@ void WebServerManager::handleApiWriteOpenTag3D() {
 
 void WebServerManager::handleApiWriteOpenSpool() {
     Serial.println("WebServerManager: POST /api/write-openspool received");
-    _server.sendHeader("Access-Control-Allow-Origin", "*");
 
     StaticJsonDocument<256> doc;
     DeserializationError err = deserializeJson(doc, _server.arg("plain"));
@@ -1717,7 +1740,6 @@ void WebServerManager::handleApiWriteOpenSpool() {
 // ---------------------------------------------------------------------------
 
 void WebServerManager::handleApiSpoolmanFindVendor() {
-    _server.sendHeader("Access-Control-Allow-Origin", "*");
     String name = _server.arg("name");
     if (name.isEmpty()) {
         _server.send(400, "application/json", "{\"error\":\"name required\"}");
@@ -1736,55 +1758,30 @@ void WebServerManager::handleApiSpoolmanFindVendor() {
         return;
     }
 
-    WiFiClient client;
-    HTTPClient http;
-    String encoded = urlEncode(name.c_str());
-    char url[256];
-    snprintf(url, sizeof(url), "%s/api/v1/vendor?name=%s", baseUrl, encoded.c_str());
-
-    http.begin(client, url);
-    http.setTimeout(5000);
-    int code = http.GET();
-    if (code != 200) {
-        http.end();
-        xSemaphoreGive(g_httpMutex);
-        _server.send(200, "application/json", "{\"found\":false}");
-        return;
-    }
-
-    String resp = http.getString();
-    http.end();
-
-    // Search array for case-insensitive name match
-    DynamicJsonDocument doc(2048);
-    if (deserializeJson(doc, resp)) {
-        xSemaphoreGive(g_httpMutex);
-        _server.send(200, "application/json", "{\"found\":false}");
-        return;
-    }
-
-    JsonArray arr = doc.as<JsonArray>();
-    for (JsonObject v : arr) {
-        const char* vname = v["name"] | "";
-        if (strcasecmp(vname, name.c_str()) == 0) {
-            StaticJsonDocument<128> result;
-            result["found"] = true;
-            result["id"] = v["id"] | -1;
-            result["name"] = vname;
-            String out;
-            serializeJson(result, out);
-            xSemaphoreGive(g_httpMutex);
-            _server.send(200, "application/json", out);
-            return;
-        }
-    }
-
+    char matchedName[64];
+    int vendorId = SpoolmanManager::getInstance().findVendorNoLock(name.c_str(), matchedName, sizeof(matchedName));
     xSemaphoreGive(g_httpMutex);
+
+    if (vendorId == -2) {
+        // Transient lookup failure — a false "not found" would steer the page
+        // toward creating a duplicate vendor
+        _server.send(503, "application/json", "{\"error\":\"Spoolman lookup failed\"}");
+        return;
+    }
+    if (vendorId >= 0) {
+        StaticJsonDocument<128> result;
+        result["found"] = true;
+        result["id"] = vendorId;
+        result["name"] = matchedName;
+        String out;
+        serializeJson(result, out);
+        _server.send(200, "application/json", out);
+        return;
+    }
     _server.send(200, "application/json", "{\"found\":false}");
 }
 
 void WebServerManager::handleApiSpoolmanFindFilament() {
-    _server.sendHeader("Access-Control-Allow-Origin", "*");
     String vendorId = _server.arg("vendor_id");
     String material = _server.arg("material");
     String colorHex = _server.arg("color_hex");
@@ -1806,61 +1803,52 @@ void WebServerManager::handleApiSpoolmanFindFilament() {
         return;
     }
 
+    // Stream-match the filament list (constant memory), then fetch just the
+    // matched filament (~700B) for the response payload. Empty color = wildcard.
+    const char* colorCmp = colorHex.c_str();
+    if (colorCmp[0] == '#') colorCmp++;
+    int filamentId = SpoolmanManager::getInstance().findFilamentNoLock(
+        atoi(vendorId.c_str()), material.c_str(), colorCmp, "");
+
+    if (filamentId == -2) {
+        xSemaphoreGive(g_httpMutex);
+        // Transient failure — a false "not found" would steer the page toward
+        // creating a duplicate filament
+        _server.send(503, "application/json", "{\"error\":\"Spoolman lookup failed\"}");
+        return;
+    }
+    if (filamentId < 0) {
+        xSemaphoreGive(g_httpMutex);
+        _server.send(200, "application/json", "{\"found\":false}");
+        return;
+    }
+
     WiFiClient client;
     HTTPClient http;
     char url[256];
-    // Spoolman's ?material= filter is unreliable (#92) — match client-side
-    snprintf(url, sizeof(url), "%s/api/v1/filament?vendor_id=%s",
-             baseUrl, vendorId.c_str());
-
+    snprintf(url, sizeof(url), "%s/api/v1/filament/%d", baseUrl, filamentId);
     http.begin(client, url);
     http.setTimeout(5000);
     int code = http.GET();
-    if (code != 200) {
-        http.end();
-        xSemaphoreGive(g_httpMutex);
-        _server.send(200, "application/json", "{\"found\":false}");
-        return;
-    }
-
-    String resp = http.getString();
+    String resp = (code == 200) ? http.getString() : String();
     http.end();
+    xSemaphoreGive(g_httpMutex);
 
-    // Use DynamicJsonDocument for potentially large filament list
-    DynamicJsonDocument doc(4096);
-    if (deserializeJson(doc, resp)) {
-        xSemaphoreGive(g_httpMutex);
-        _server.send(200, "application/json", "{\"found\":false}");
+    DynamicJsonDocument doc(2048);
+    if (code != 200 || deserializeJson(doc, resp)) {
+        _server.send(503, "application/json", "{\"error\":\"Spoolman lookup failed\"}");
         return;
     }
 
-    // Return the first filament that matches vendor + material (optionally color)
-    JsonArray arr = doc.as<JsonArray>();
-    for (JsonObject f : arr) {
-        const char* fmat = f["material"] | "";
-        if (strcasecmp(fmat, material.c_str()) == 0) {
-            if (!colorHex.isEmpty()) {
-                const char* fc = f["color_hex"] | "";
-                const char* cmp = colorHex.c_str();
-                if (cmp[0] == '#') cmp++;
-                if (strcasecmp(fc[0] == '#' ? fc + 1 : fc, cmp) != 0) continue;
-            }
-            StaticJsonDocument<256> result;
-            result["found"] = true;
-            result["id"] = f["id"] | -1;
-            result["name"] = f["name"] | "";
-            result["material"] = fmat;
-            result["color_hex"] = f["color_hex"] | "";
-            String out;
-            serializeJson(result, out);
-            xSemaphoreGive(g_httpMutex);
-            _server.send(200, "application/json", out);
-            return;
-        }
-    }
-
-    xSemaphoreGive(g_httpMutex);
-    _server.send(200, "application/json", "{\"found\":false}");
+    StaticJsonDocument<256> result;
+    result["found"] = true;
+    result["id"] = filamentId;
+    result["name"] = doc["name"] | "";
+    result["material"] = doc["material"] | "";
+    result["color_hex"] = doc["color_hex"] | "";
+    String out;
+    serializeJson(result, out);
+    _server.send(200, "application/json", out);
 }
 
 // ── Enrichment save helpers ─────────────────────────────────
@@ -1869,30 +1857,19 @@ void WebServerManager::handleApiSpoolmanFindFilament() {
 // confirmedId: -1 = search needed, -2 = user declined match, >0 = already confirmed
 int WebServerManager::enrichFindOrCreateVendor(WiFiClient& client, HTTPClient& http,
                                                 const char* baseUrl, const char* manufacturer, int confirmedId) {
-    if (confirmedId != -1 || manufacturer[0] == '\0') return confirmedId;
+    // confirmedId >= 0: user confirmed an existing vendor. -2: user explicitly
+    // declined the suggested match — skip the search and create fresh (#218).
+    // -1: no confirmation dialog happened — search then create.
+    if (confirmedId >= 0 || manufacturer[0] == '\0') return (confirmedId >= 0) ? confirmedId : -1;
+    bool declinedMatch = (confirmedId == -2);
 
     char url[256];
-    String encodedMfg = urlEncode(manufacturer);
-    snprintf(url, sizeof(url), "%s/api/v1/vendor?name=%s", baseUrl, encodedMfg.c_str());
-    http.begin(client, url);
-    http.setTimeout(5000);
-    int code = http.GET();
     int vendorId = -1;
-    if (code == 200) {
-        String response = http.getString();
-        DynamicJsonDocument vDoc(2048);
-        if (!deserializeJson(vDoc, response)) {
-            for (JsonObject v : vDoc.as<JsonArray>()) {
-                if (strcasecmp(v["name"] | "", manufacturer) == 0) {
-                    vendorId = v["id"] | -1;
-                    break;
-                }
-            }
-        }
+    if (!declinedMatch) {
+        vendorId = SpoolmanManager::getInstance().findVendorNoLock(manufacturer);
+        if (vendorId == -2) return -2;  // lookup failed — caller must not create
+        if (vendorId >= 0) return vendorId;
     }
-    http.end();
-
-    if (vendorId >= 0) return vendorId;
 
     StaticJsonDocument<128> vBody;
     vBody["name"] = manufacturer;
@@ -1902,7 +1879,7 @@ int WebServerManager::enrichFindOrCreateVendor(WiFiClient& client, HTTPClient& h
     http.begin(client, url);
     http.setTimeout(5000);
     http.addHeader("Content-Type", "application/json");
-    code = http.POST(vJson);
+    int code = http.POST(vJson);
     if (code == 200 || code == 201) {
         String response = http.getString();
         StaticJsonDocument<256> vResp;
@@ -1918,39 +1895,28 @@ int WebServerManager::enrichFindOrCreateFilament(WiFiClient& client, HTTPClient&
                                                    const char* baseUrl, const char* material, const char* colorHex,
                                                    int vendorId, float density, float diameter,
                                                    int bedTemp, int nozzleTemp, int confirmedId) {
-    if (confirmedId != -1 || material[0] == '\0') return confirmedId;
+    // confirmedId >= 0: user confirmed an existing filament. -2: user explicitly
+    // declined the suggested match — skip the search and create fresh (#218).
+    // -1: no confirmation dialog happened — search then create.
+    if (confirmedId >= 0 || material[0] == '\0') return (confirmedId >= 0) ? confirmedId : -1;
+    bool declinedMatch = (confirmedId == -2);
 
     char url[256];
     int filamentId = -1;
 
-    // Search existing filaments by vendor — client-side match (#92)
-    if (vendorId > 0) {
-        snprintf(url, sizeof(url), "%s/api/v1/filament?vendor_id=%d", baseUrl, vendorId);
-        http.begin(client, url);
-        http.setTimeout(5000);
-        int code = http.GET();
-        if (code == 200) {
-            String response = http.getString();
-            DynamicJsonDocument fDoc(8192);
-            if (!deserializeJson(fDoc, response)) {
-                const char* colorCmp = colorHex;
-                if (colorCmp[0] == '#') colorCmp++;
-                for (JsonObject f : fDoc.as<JsonArray>()) {
-                    if (strcasecmp(f["material"] | "", material) != 0) continue;
-                    if (colorHex[0] != '\0') {
-                        const char* fc = f["color_hex"] | "";
-                        if (fc[0] == '#') fc++;
-                        if (strcasecmp(fc, colorCmp) != 0) continue;
-                    }
-                    filamentId = f["id"] | -1;
-                    break;
-                }
-            }
-        }
-        http.end();
+    // Streaming search — constant memory, replaces an 8KB DOM + full-body String
+    // (#92 client-side matching preserved). When the vendor is unknown, search
+    // unfiltered rather than skipping: blind-creating here made vendorless
+    // duplicates that ping-ponged with the sync path (#218). Caller holds
+    // g_httpMutex, which the NoLock search requires.
+    if (!declinedMatch) {
+        const char* colorCmp = colorHex;
+        if (colorCmp[0] == '#') colorCmp++;
+        // Empty color = wildcard, matching the old DOM matcher's behavior
+        filamentId = SpoolmanManager::getInstance().findFilamentNoLock(vendorId, material, colorCmp, material);
+        if (filamentId == -2) return -2;  // lookup failed — caller must not create
+        if (filamentId >= 0) return filamentId;
     }
-
-    if (filamentId >= 0) return filamentId;
 
     // Create new filament
     StaticJsonDocument<512> fBody;
@@ -1984,35 +1950,48 @@ int WebServerManager::enrichFindOrCreateFilament(WiFiClient& client, HTTPClient&
 
 // Fetch all spools and match nfc_id client-side — Spoolman's extra_field filter is unreliable
 int WebServerManager::enrichFindSpoolByUid(WiFiClient& client, HTTPClient& http,
-                                            const char* baseUrl, const char* quotedUid, float& outInitialWeight,
-                                            String& outExtraJson) {
+                                            const char* baseUrl, const char* uid, float& outInitialWeight,
+                                            String& outExtraJson, String& outFilamentMaterial,
+                                            String& outFilamentColor) {
+    outInitialWeight = 0.0f;
+    outExtraJson = "";
+    outFilamentMaterial = "";
+    outFilamentColor = "";
+
+    // Two-step lookup (memory phase 2): the old path fetched the entire spool
+    // list into a 16KB DOM and was capped at 200 spools. The streaming search
+    // finds the id with bounded memory and no count cap; then one single-spool
+    // GET (~1KB) supplies the fields. Caller holds g_httpMutex, which the
+    // NoLock search requires.
+    // Return contract: id >= 0 found; -1 no active spool (creating is correct);
+    // -2 lookup failed (transient) — callers must abort, NOT create (#218 family)
+    int spoolId = SpoolmanManager::getInstance().findSpoolIdByUidNoLock(uid);
+    if (spoolId < 0) return spoolId;
+
     char url[256];
-    snprintf(url, sizeof(url), "%s/api/v1/spool?limit=200", baseUrl);
+    snprintf(url, sizeof(url), "%s/api/v1/spool/%d", baseUrl, spoolId);
     http.begin(client, url);
     http.setTimeout(5000);
     int code = http.GET();
-    int spoolId = -1;
-    outInitialWeight = 0.0f;
-    outExtraJson = "";
-    if (code == 200) {
-        String response = http.getString();
-        DynamicJsonDocument sDoc(16384);
-        if (!deserializeJson(sDoc, response)) {
-            JsonArray arr = sDoc.as<JsonArray>();
-            for (size_t i = 0; i < arr.size(); i++) {
-                const char* nfcId = arr[i]["extra"]["nfc_id"] | "";
-                if (strcmp(nfcId, quotedUid) != 0) continue;
-                if (arr[i]["archived"] | false) continue;
-                spoolId = arr[i]["id"] | -1;
-                outInitialWeight = arr[i]["initial_weight"] | 0.0f;
-                // Capture existing extras — Spoolman PATCH replaces the whole
-                // extra map, so any update that touches extras must merge
-                serializeJson(arr[i]["extra"], outExtraJson);
-                break;
-            }
-        }
+    if (code != 200) {
+        http.end();
+        return -2;
     }
+    String response = http.getString();
     http.end();
+
+    DynamicJsonDocument sDoc(3072);
+    if (deserializeJson(sDoc, response)) return -2;
+    if (sDoc["archived"] | false) return -1;  // search excludes archived, but a race is possible
+
+    outInitialWeight = sDoc["initial_weight"] | 0.0f;
+    // Current filament identity — lets the caller skip re-pointing filament_id
+    // when the resolved filament is semantically the same (#218)
+    outFilamentMaterial = (const char*)(sDoc["filament"]["material"] | "");
+    outFilamentColor    = (const char*)(sDoc["filament"]["color_hex"] | "");
+    // Capture existing extras — Spoolman PATCH replaces the whole extra map,
+    // so any update that touches extras must merge
+    serializeJson(sDoc["extra"], outExtraJson);
     return spoolId;
 }
 
@@ -2022,7 +2001,11 @@ bool WebServerManager::enrichUpdateSpool(WiFiClient& client, HTTPClient& http, c
                                            const char* existingExtraJson, const char* tagFormat) {
     char url[256];
     StaticJsonDocument<512> patch;
-    patch["filament_id"] = filamentId;
+    // filamentId < 0 means "leave the spool's filament alone" — the caller
+    // determined the resolved filament is semantically the same (#218)
+    if (filamentId >= 0) {
+        patch["filament_id"] = filamentId;
+    }
 
     // Only touch extras when writing tag_format. Spoolman PATCH replaces the
     // entire extra map, so the existing extras (nfc_id, middleware fields like
@@ -2104,7 +2087,6 @@ int WebServerManager::enrichCreateSpool(WiFiClient& client, HTTPClient& http, co
 // ── /api/spoolman/save-enrichment ───────────────────────────
 
 void WebServerManager::handleApiSpoolmanSaveEnrichment() {
-    _server.sendHeader("Access-Control-Allow-Origin", "*");
 
     StaticJsonDocument<512> doc;
     if (deserializeJson(doc, _server.arg("plain"))) {
@@ -2159,6 +2141,11 @@ void WebServerManager::handleApiSpoolmanSaveEnrichment() {
     HTTPClient http;
 
     int vendorId = enrichFindOrCreateVendor(client, http, baseUrl, manufacturer, confirmedVendorId);
+    if (vendorId == -2) {
+        xSemaphoreGive(g_httpMutex);
+        _server.send(503, "application/json", "{\"error\":\"Spoolman lookup failed — try again\"}");
+        return;
+    }
     int filamentId = enrichFindOrCreateFilament(client, http, baseUrl, material, colorHex,
                                                  vendorId, density, diameter, bedTemp, nozzleTemp, confirmedFilamentId);
     if (filamentId < 0) {
@@ -2170,11 +2157,36 @@ void WebServerManager::handleApiSpoolmanSaveEnrichment() {
     char quotedUid[130];
     snprintf(quotedUid, sizeof(quotedUid), "\"%s\"", uid);
     float existingInitialWeight = 0.0f;
-    String existingExtraJson;
-    int spoolId = enrichFindSpoolByUid(client, http, baseUrl, quotedUid, existingInitialWeight, existingExtraJson);
+    String existingExtraJson, existingFilMaterial, existingFilColor;
+    int spoolId = enrichFindSpoolByUid(client, http, baseUrl, uid, existingInitialWeight, existingExtraJson,
+                                       existingFilMaterial, existingFilColor);
+    if (spoolId == -2) {
+        // Lookup failed (transport/parse) — creating here would duplicate an
+        // existing spool we simply couldn't see (#218 family)
+        xSemaphoreGive(g_httpMutex);
+        _server.send(503, "application/json", "{\"error\":\"Spoolman lookup failed — try again\"}");
+        return;
+    }
 
     if (spoolId > 0) {
-        if (!enrichUpdateSpool(client, http, baseUrl, spoolId, filamentId, remainingG, existingInitialWeight,
+        // Don't re-point the spool's filament when its current one already matches
+        // the requested material+color — dedup can resolve a different id for the
+        // same physical filament, and re-pointing churns with the sync path (#218)
+        int patchFilamentId = filamentId;
+        {
+            const char* ec = existingFilColor.c_str();
+            if (ec[0] == '#') ec++;
+            const char* rc = colorHex;
+            if (rc[0] == '#') rc++;
+            bool sameMaterial = existingFilMaterial.length() > 0 &&
+                                strcasecmp(existingFilMaterial.c_str(), material) == 0;
+            bool sameColor = (rc[0] == '\0') ||
+                             (strlen(ec) >= 6 && strncasecmp(ec, rc, 6) == 0);
+            if (sameMaterial && sameColor) {
+                patchFilamentId = -1;
+            }
+        }
+        if (!enrichUpdateSpool(client, http, baseUrl, spoolId, patchFilamentId, remainingG, existingInitialWeight,
                                existingExtraJson.c_str(), tagFormat)) {
             xSemaphoreGive(g_httpMutex);
             _server.send(500, "application/json", "{\"error\":\"spool update failed\"}");
@@ -2199,7 +2211,6 @@ void WebServerManager::handleApiSpoolmanSaveEnrichment() {
 // ---------------------------------------------------------------------------
 
 void WebServerManager::sendError(int code, const char* msg) {
-    _server.sendHeader("Access-Control-Allow-Origin", "*");
     // Escape quotes, backslashes, and control chars for valid JSON
     char escaped[192];
     size_t j = 0;

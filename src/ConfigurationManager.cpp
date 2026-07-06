@@ -1,6 +1,7 @@
 #include "ConfigurationManager.h"
 #include "UserConfig.h"
 #include "DeviceConfig.h"
+#include "BoardPins.h"
 #include <cstring>
 #include <Arduino.h>
 
@@ -38,6 +39,7 @@ static const char* NVS_KEY_BAMBU_DASH    = "bambu_dash";
 static const char* NVS_KEY_WIFI_AWAKE    = "wifi_awake";
 static const char* NVS_KEY_U1_ON         = "u1_on";
 static const char* NVS_KEY_U1_CHANNEL    = "u1_channel";
+static const char* NVS_KEY_LED_PIN       = "led_pin";
 
 // Sanitize hostname: enforce mDNS naming constraints (lowercase alphanum + hyphens,
 // no leading/trailing hyphens) and reject empty strings to avoid boot-time errors.
@@ -59,6 +61,100 @@ void sanitizeHostname(char* buf, size_t cap) {
     }
     strncpy(buf, out, cap - 1);
     buf[cap - 1] = '\0';
+}
+
+// Reject GPIOs that can't safely drive the status LED on the CURRENT board and
+// fall back to the default sentinel (LED_PIN_DEFAULT -> PIN_STATUS_LED). Blocklists
+// are selected by the same BOARD_* flags as BoardPins.h. Used as an NVS boundary
+// guard on both read (loadFromNVS) and write (saveToNVS), same as sanitizeHostname.
+static uint8_t sanitizeLedPin(uint8_t pin) {
+    if (pin == LED_PIN_DEFAULT) {
+        return LED_PIN_DEFAULT;  // no override requested
+    }
+
+    // NFC reader pins are always in use — driving NeoPixel on the SPI bus or a
+    // control line breaks scanning outright. PN532 aliases the PN5180 pins on
+    // every board, so this set covers both readers.
+    static const int16_t nfcPins[] = {
+        PIN_PN5180_NSS, PIN_PN5180_SCK, PIN_PN5180_MISO, PIN_PN5180_MOSI,
+        PIN_PN5180_RST, PIN_PN5180_BUSY, PIN_PN5180_GPIO, PIN_PN5180_IRQ,
+        PIN_PN5180_AUX,
+    };
+    for (size_t i = 0; i < sizeof(nfcPins) / sizeof(nfcPins[0]); i++) {
+        if (nfcPins[i] >= 0 && pin == (uint8_t)nfcPins[i]) {
+            Serial.printf("ConfigurationManager: led_pin %u is an NFC reader pin, using default GPIO %u\n",
+                          (unsigned)pin, (unsigned)PIN_STATUS_LED);
+            return LED_PIN_DEFAULT;
+        }
+    }
+
+    bool valid;
+#if defined(BOARD_ESP32_C3)
+    // C3 exposes only GPIO 0-21; flash (12-17), USB-serial (18-19) and straps
+    // (2,8,9) are unusable, so validate against the known-good allowlist.
+    switch (pin) {
+        case 0: case 1: case 3: case 4: case 5: case 6: case 7:
+        case 10: case 20: case 21:
+            valid = true; break;
+        default:
+            valid = false; break;
+    }
+#elif defined(BOARD_ESP32_S3)
+    // S3: reject straps/USB-JTAG (0,3,19,20), SPI flash (26-32), straps (45,46).
+    valid = !(pin == 0 || pin == 3 || pin == 19 || pin == 20 ||
+              (pin >= 26 && pin <= 32) || pin == 45 || pin == 46 || pin > 48);
+  #if defined(BOARD_S3_DEVKITC)
+    // N16R8 octal PSRAM additionally claims GPIO 33-37.
+    if (pin >= 33 && pin <= 37) valid = false;
+  #endif
+#else
+    // ESP32 WROOM: reject straps (0,2,12,15), SPI flash (6-11), input-only (34-39).
+    valid = !(pin == 0 || pin == 2 || (pin >= 6 && pin <= 11) || pin == 12 ||
+              pin == 15 || (pin >= 34 && pin <= 39) || pin > 39);
+#endif
+
+    if (!valid) {
+        Serial.printf("ConfigurationManager: led_pin %u invalid for this board, using default GPIO %u\n",
+                      (unsigned)pin, (unsigned)PIN_STATUS_LED);
+        return LED_PIN_DEFAULT;
+    }
+    return pin;
+}
+
+// Feature-owned pins (LCD, TFT, keypad) are only off-limits when that feature
+// is enabled — on the WROOM the TFT DC pin doubles as the default status LED,
+// so unconditional blocking would reject the board default itself. Called at
+// save time where the update's own feature flags are authoritative.
+static uint8_t rejectFeaturePins(uint8_t pin, bool lcdOn, bool tftOn, bool keypadOn) {
+    if (pin == LED_PIN_DEFAULT) return pin;
+
+    struct FeaturePin { int16_t pin; bool active; const char* what; };
+    const FeaturePin featurePins[] = {
+        { PIN_LCD_SDA,     lcdOn,    "LCD" },
+        { PIN_LCD_SCL,     lcdOn,    "LCD" },
+        { PIN_TFT_MOSI,    tftOn,    "TFT" },
+        { PIN_TFT_SCLK,    tftOn,    "TFT" },
+        { PIN_TFT_CS,      tftOn,    "TFT" },
+        { PIN_TFT_DC,      tftOn,    "TFT" },
+        { PIN_TFT_RST,     tftOn,    "TFT" },
+        { PIN_TFT_BL,      tftOn,    "TFT" },
+        { PIN_KEYPAD_ROW1, keypadOn, "keypad" },
+        { PIN_KEYPAD_ROW2, keypadOn, "keypad" },
+        { PIN_KEYPAD_ROW3, keypadOn, "keypad" },
+        { PIN_KEYPAD_ROW4, keypadOn, "keypad" },
+        { PIN_KEYPAD_COL1, keypadOn, "keypad" },
+        { PIN_KEYPAD_COL2, keypadOn, "keypad" },
+        { PIN_KEYPAD_COL3, keypadOn, "keypad" },
+    };
+    for (size_t i = 0; i < sizeof(featurePins) / sizeof(featurePins[0]); i++) {
+        const FeaturePin& f = featurePins[i];
+        if (f.active && f.pin >= 0 && pin == (uint8_t)f.pin) {
+            Serial.printf("ConfigurationManager: led_pin %u is in use by the enabled %s, using default GPIO %u\n",
+                          (unsigned)pin, f.what, (unsigned)PIN_STATUS_LED);
+            return LED_PIN_DEFAULT;
+        }
+    }
+    return pin;
 }
 
 ConfigurationManager& ConfigurationManager::getInstance() {
@@ -269,6 +365,10 @@ bool ConfigurationManager::loadFromNVS() {
         _u1Channel = (ch <= 3) ? ch : 0;  // clamp invalid values from NVS
         anyOverride = true;
     }
+    if (prefs.isKey(NVS_KEY_LED_PIN)) {
+        _ledPin = sanitizeLedPin(prefs.getUChar(NVS_KEY_LED_PIN, LED_PIN_DEFAULT));
+        anyOverride = true;
+    }
 
     prefs.end();
     return anyOverride;
@@ -387,6 +487,10 @@ uint8_t ConfigurationManager::getU1Channel() const {
     return _u1Channel;
 }
 
+uint8_t ConfigurationManager::getLedPin() const {
+    return (_ledPin == LED_PIN_DEFAULT) ? PIN_STATUS_LED : _ledPin;
+}
+
 void ConfigurationManager::getCurrentConfig(ConfigUpdate& out) const {
     memset(&out, 0, sizeof(out));
     strncpy(out.wifi_ssid, _ssid, sizeof(out.wifi_ssid) - 1);
@@ -414,6 +518,7 @@ void ConfigurationManager::getCurrentConfig(ConfigUpdate& out) const {
     out.wifi_keep_awake = _wifiKeepAwake ? 1 : 0;
     out.u1_enabled = _u1Enabled ? 1 : 0;
     out.u1_channel = _u1Channel;
+    out.led_pin = _ledPin;
 }
 
 #ifndef NATIVE_TEST
@@ -461,6 +566,12 @@ bool ConfigurationManager::saveToNVS(const ConfigUpdate& update) {
     prefs.putBool(NVS_KEY_WIFI_AWAKE, update.wifi_keep_awake != 0);
     prefs.putBool(NVS_KEY_U1_ON, update.u1_enabled != 0);
     prefs.putUChar(NVS_KEY_U1_CHANNEL, (update.u1_channel <= 3) ? update.u1_channel : 0);
+    {
+        uint8_t ledPin = sanitizeLedPin(update.led_pin);
+        ledPin = rejectFeaturePins(ledPin, update.lcd_enabled != 0,
+                                   update.tft_enabled != 0, update.keypad_enabled != 0);
+        prefs.putUChar(NVS_KEY_LED_PIN, ledPin);
+    }
 
     // Invalidate Spoolman enrichment cache on config change to force re-fetch
     // (config change could invalidate cached spool lookups)

@@ -17,4 +17,4 @@ jobs:
           stale-issue-label: "stale"
           days-before-stale: 60
           days-before-close: 14
-          exempt-issue-labels: "P1-critical,P2-high,blocked"
+          exempt-issue-labels: "P1-critical,P2-high,blocked,pending-release"
