@@ -234,9 +234,12 @@ static int httpPatch(const char* path, const char* body, String& response) {
     return code;
 }
 
-// Find a spool by nfc_id using ArduinoJson's DeserializationOption::Filter.
-// The filter tells ArduinoJson to skip all fields except id, archived, and
-// extra.nfc_id during parsing — keeps memory at ~4KB regardless of spool count.
+// Streaming spool search by nfc_id over the given path (which may carry a
+// query, e.g. "?filament.id=N"). Pull-parses the HTTP stream with constant
+// memory — replaces an ArduinoJson filter parse whose filtered document still
+// grew with spool count. Archived spools are skipped and the highest matching
+// id wins, matching the filter version. Returns id >= 0 match, -1 not found,
+// -2 transport/parse failure — callers must NOT create on -2.
 static int streamFindSpoolByNfcId(const char* path, const char* uuid) {
     const char* baseUrl = ConfigurationManager::getInstance().getSpoolmanURL();
     char url[256];
@@ -248,43 +251,110 @@ static int streamFindSpoolByNfcId(const char* path, const char* uuid) {
     streamHttp.begin(streamClient, url);
     streamHttp.setTimeout(10000);
     int code = streamHttp.GET();
-
     if (code != 200) {
         Serial.printf("SpoolmanManager: streamFind HTTP %d for %s\n", code, path);
         streamHttp.end();
         return -2;
     }
 
-    // Filter: only extract id, archived, and extra.nfc_id from each spool
-    JsonDocument filter;
-    filter[0]["id"] = true;
-    filter[0]["archived"] = true;
-    filter[0]["extra"]["nfc_id"] = true;
+    HttpClientStream stm(*streamHttp.getStreamPtr());
+    json_reader reader(stm);
 
-    JsonDocument doc;
-    DeserializationError err = deserializeJson(doc, *streamHttp.getStreamPtr(),
-                                                DeserializationOption::Filter(filter));
-    streamHttp.end();
-
-    if (err) {
-        Serial.printf("SpoolmanManager: streamFind parse error: %s\n", err.c_str());
-        return -2;
-    }
-
-    // Build quoted UID for comparison ("04A651AD8F6180")
+    // nfc_id is stored double-quoted in Spoolman: "\"UUID\"" — compare both forms
     char quotedUuid[130];
     snprintf(quotedUuid, sizeof(quotedUuid), "\"%s\"", uuid);
 
     int bestMatchId = -1;
-    for (JsonObject spool : doc.as<JsonArray>()) {
-        if (spool["archived"] | false) continue;
-        const char* nfcId = spool["extra"]["nfc_id"] | "";
-        // nfc_id is stored double-quoted in Spoolman: "\"UUID\""
-        // Compare both with and without outer quotes
-        if (strcasecmp(nfcId, uuid) == 0 || strcasecmp(nfcId, quotedUuid) == 0) {
-            int id = spool["id"] | -1;
-            if (id > bestMatchId) bestMatchId = id;
+    bool sawAnyNode = false;
+    bool parseError = false;
+    bool docComplete = false;  // saw the outer array close — reader stops silently on malformed JSON
+    bool inElement = false;
+    int nestLevel = 0;   // containers nested INSIDE the current element
+    bool inExtra = false;  // directly inside the element's top-level "extra" object
+    int curId = -1;
+    bool curArchived = false;
+    char curNfcId[130];
+    curNfcId[0] = '\0';
+
+    while (reader.read()) {
+        sawAnyNode = true;
+        json_node_type nt = reader.node_type();
+        if (nt == json_node_type::error) { parseError = true; break; }
+
+        if (!inElement) {
+            if (nt == json_node_type::object) {
+                inElement = true;
+                nestLevel = 0;
+                inExtra = false;
+                curId = -1;
+                curArchived = false;
+                curNfcId[0] = '\0';
+            } else if (nt == json_node_type::end_array) {
+                docComplete = true;
+            }
+            continue;
         }
+
+        if (nt == json_node_type::object || nt == json_node_type::array) {
+            nestLevel++;
+            continue;
+        }
+        if (nt == json_node_type::end_object || nt == json_node_type::end_array) {
+            if (nestLevel > 0) {
+                nestLevel--;
+                if (nestLevel == 0) inExtra = false;
+                continue;
+            }
+            // Element complete — evaluate
+            if (!curArchived && curId >= 0 &&
+                (strcasecmp(curNfcId, uuid) == 0 || strcasecmp(curNfcId, quotedUuid) == 0)) {
+                if (curId > bestMatchId) bestMatchId = curId;
+            }
+            inElement = false;
+            continue;
+        }
+
+        if (nt == json_node_type::field) {
+            char fieldName[16];
+            const char* fv = reader.value();
+            strncpy(fieldName, fv ? fv : "", sizeof(fieldName) - 1);
+            fieldName[sizeof(fieldName) - 1] = '\0';
+            bool topLevelField = (nestLevel == 0);
+            bool fieldInExtra = (nestLevel == 1) && inExtra;
+            if (!reader.read()) break;
+            json_node_type vt = reader.node_type();
+            if (vt == json_node_type::error) { parseError = true; break; }
+            if (vt == json_node_type::object || vt == json_node_type::array) {
+                // Field value is a container — count it so its closing brace
+                // decrements instead of ending the element
+                if (topLevelField && vt == json_node_type::object &&
+                    strcmp(fieldName, "extra") == 0) {
+                    inExtra = true;
+                }
+                nestLevel++;
+                continue;
+            }
+            if (topLevelField) {
+                if (strcmp(fieldName, "id") == 0) {
+                    readIntValue(reader, curId);
+                } else if (strcmp(fieldName, "archived") == 0) {
+                    curArchived = (reader.value_type() == json_value_type::boolean) &&
+                                  reader.value_bool();
+                }
+            } else if (fieldInExtra && strcmp(fieldName, "nfc_id") == 0) {
+                readStringValue(reader, curNfcId, sizeof(curNfcId));
+            }
+        }
+    }
+    bool truncated = (reader.error() != json_error::none);
+    streamHttp.end();
+
+    // Parse errors and truncated streams must not read as "not found" — the
+    // consumers create on not-found, and creating on a failed lookup mints
+    // duplicate spools (#218 family)
+    if (parseError || !sawAnyNode || truncated || !docComplete) {
+        Serial.printf("SpoolmanManager: streamFind parse/transport failure for %s\n", path);
+        return -2;
     }
 
     if (bestMatchId >= 0) {
@@ -528,6 +598,7 @@ static int streamFindFilament(int vendorId, const char* targetMaterial,
     int looseId = -1;  // first material+color match regardless of name
     bool sawAnyNode = false;
     bool parseError = false;
+    bool docComplete = false;  // saw the outer array close — reader stops silently on malformed JSON
     bool inElement = false;
     int nestLevel = 0;  // containers nested INSIDE the current element (vendor, extra, ...)
     int curId = -1;
@@ -548,6 +619,8 @@ static int streamFindFilament(int vendorId, const char* targetMaterial,
                 nestLevel = 0;
                 curId = -1;
                 curMaterial[0] = curColor[0] = curName[0] = '\0';
+            } else if (nt == json_node_type::end_array) {
+                docComplete = true;
             }
             continue;
         }
@@ -618,7 +691,7 @@ static int streamFindFilament(int vendorId, const char* targetMaterial,
     // Parse errors and truncated streams must not read as "not found" — the
     // consumers create on not-found, and creating on a failed lookup mints
     // duplicates (#218 family)
-    if (parseError || (!sawAnyNode) || (exactId < 0 && truncated)) {
+    if (parseError || (!sawAnyNode) || (exactId < 0 && (truncated || !docComplete))) {
         Serial.println("SpoolmanManager: streamFindFilament parse/transport failure");
         return -2;
     }
@@ -807,7 +880,9 @@ static int findOrCreateFilament(int vendorId, const SpoolmanSyncRequest& req) {
 }
 
 static int findSpoolByUuid(int filamentId, const char* uuid) {
-    // First try: search within this filament's spools
+    // First try: search within this filament's spools. A -2 here is deliberately
+    // not propagated — the global fallback searches a superset, so its clean
+    // result (match or definitive -1) supersedes a scoped-lookup failure.
     char path[128];
     snprintf(path, sizeof(path), "/api/v1/spool?filament.id=%d", filamentId);
     int id = streamFindSpoolByNfcId(path, uuid);
@@ -1702,6 +1777,13 @@ bool SpoolmanManager::syncSpool(const SpoolmanSyncRequest& req, int& resolvedSpo
         // Stale/mismatched spoolman_id on tag (common right after tag swaps/writeback):
         // recover by UUID before creating vendor/filament/spool to avoid duplicates.
         int existingSpoolId = findSpoolByUuidGlobal(req.spool_id);
+        if (existingSpoolId == -2) {
+            // Lookup failed — can't tell whether this spool exists. Abort the
+            // sync instead of risking a duplicate create downstream (#218 family)
+            Serial.println("SpoolmanManager: UID lookup failed — aborting sync this cycle");
+            xSemaphoreGive(httpMutex_);
+            return false;
+        }
         if (existingSpoolId > 0) {
             int vendorId = findOrCreateVendor(req.manufacturer);
             int filamentId = (vendorId >= 0) ? findOrCreateFilament(vendorId, req) : -1;
@@ -1759,11 +1841,21 @@ bool SpoolmanManager::syncSpool(const SpoolmanSyncRequest& req, int& resolvedSpo
     }
 
     int spoolId = findSpoolByUuid(filamentId, req.spool_id);
+    if (spoolId == -2) {
+        Serial.println("SpoolmanManager: UID lookup failed — aborting sync this cycle");
+        xSemaphoreGive(httpMutex_);
+        return false;
+    }
 
     if (spoolId < 0) {
         // No spool with this nfc_id under the new filament.
         // Check if another spool (different filament) has this nfc_id.
         int oldSpoolId = findSpoolByUuidGlobal(req.spool_id);
+        if (oldSpoolId == -2) {
+            Serial.println("SpoolmanManager: UID lookup failed — aborting sync this cycle");
+            xSemaphoreGive(httpMutex_);
+            return false;
+        }
         if (oldSpoolId > 0) {
             SpoolReconcileAction action = (oldSpoolId == justLinkedSpoolId)
                 ? SpoolReconcileAction::KeepSpoolWeightOnly

@@ -507,6 +507,9 @@ void WebServerManager::handleApiSpoolmanSpools() {
     char url[256];
     snprintf(url, sizeof(url), "%s/api/v1/spool?archived=false", baseUrl);
     http.begin(client, url);
+    // HTTP/1.0 — the raw stream is relayed verbatim, so chunked framing from a
+    // reverse-proxied Spoolman would otherwise corrupt the JSON (c16bcfd rule)
+    http.useHTTP10(true);
     http.setTimeout(5000);
     int code = http.GET();
 
