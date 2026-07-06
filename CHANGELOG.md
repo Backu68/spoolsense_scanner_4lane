@@ -2,6 +2,10 @@
 
 ## [1.7.7] - 2026-07-06
 
+### Security
+
+- **Web API is same-origin only** — removed the `Access-Control-Allow-Origin: *` header from every endpoint and the development-era CORS preflight handler. The scanner serves its own UI, so browsers enforce same-origin automatically; the wildcard let any website a browser on your LAN visited call the scanner's API (including config changes and OTA). Verified nothing legitimate depends on cross-origin access: the spoolsense.org web flasher uses WebSerial, the middleware panel calls its own origin, and the mobile app's native HTTP client is unaffected by CORS.
+
 ### Added
 
 - **Configurable status LED pin** — new optional `led_pin` setting on the config page (Hardware section). Empty means the board default; overrides are validated against per-board rules (strap pins, flash pins, input-only pins, PSRAM-reserved pins, NFC reader pins, and enabled-feature pins) at the NVS boundary and fall back to the default with a serial warning if invalid. (#203, closes #196)

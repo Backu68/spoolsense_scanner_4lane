@@ -167,15 +167,8 @@ bool WebServerManager::begin(bool apMode, uint16_t port) {
         });
     }
 
-    // Allow browser preflight requests (CORS) so the page can be tested
-    // from a local file during development.
     _server.onNotFound([this]() {
-        if (_server.method() == HTTP_OPTIONS) {
-            _server.sendHeader("Access-Control-Allow-Origin", "*");
-            _server.sendHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
-            _server.sendHeader("Access-Control-Allow-Headers", "Content-Type");
-            _server.send(204);
-        } else if (_apMode) {
+        if (_apMode) {
             // Captive portal: redirect unknown requests to config page
             _server.sendHeader("Location", "http://192.168.4.1/config");
             _server.send(302, "text/plain", "Redirecting to setup...");
@@ -201,43 +194,35 @@ void WebServerManager::handleClient() {
 // ---------------------------------------------------------------------------
 
 void WebServerManager::handleLanding() {
-    _server.sendHeader("Access-Control-Allow-Origin", "*");
     _server.send_P(200, "text/html", LANDING_HTML);
 }
 
 void WebServerManager::handleReader() {
-    _server.sendHeader("Access-Control-Allow-Origin", "*");
     _server.send_P(200, "text/html", READER_HTML);
 }
 
 void WebServerManager::handleOpenPrintTagWriter() {
-    _server.sendHeader("Access-Control-Allow-Origin", "*");
     _server.send_P(200, "text/html", OPENPRINTTAG_WRITER_HTML);
 }
 
 void WebServerManager::handleTigerTagWriter() {
-    _server.sendHeader("Access-Control-Allow-Origin", "*");
     _server.send_P(200, "text/html", TIGERTAG_WRITER_HTML);
 }
 
 void WebServerManager::handleOpenTag3DWriter() {
-    _server.sendHeader("Access-Control-Allow-Origin", "*");
     _server.send_P(200, "text/html", OPENTAG3D_WRITER_HTML);
 }
 
 void WebServerManager::handleOpenSpoolWriter() {
-    _server.sendHeader("Access-Control-Allow-Origin", "*");
     _server.send_P(200, "text/html", OPENSPOOL_WRITER_HTML);
 }
 
 void WebServerManager::handleSharedCSS() {
-    _server.sendHeader("Access-Control-Allow-Origin", "*");
     _server.sendHeader("Cache-Control", "no-store");
     _server.send_P(200, "text/css", SHARED_CSS);
 }
 
 void WebServerManager::handleSharedJS() {
-    _server.sendHeader("Access-Control-Allow-Origin", "*");
     _server.sendHeader("Cache-Control", "no-store");
     _server.send_P(200, "application/javascript", SHARED_JS);
 }
@@ -263,32 +248,26 @@ void WebServerManager::handleOpenSpoolLogo() {
 }
 
 void WebServerManager::handleUpdatePage() {
-    _server.sendHeader("Access-Control-Allow-Origin", "*");
     _server.send_P(200, "text/html", UPDATE_HTML);
 }
 
 void WebServerManager::handleConfigPage() {
-    _server.sendHeader("Access-Control-Allow-Origin", "*");
     _server.send_P(200, "text/html", CONFIG_HTML);
 }
 
 void WebServerManager::handleTroubleshootingPage() {
-    _server.sendHeader("Access-Control-Allow-Origin", "*");
     _server.send_P(200, "text/html", TROUBLESHOOTING_HTML);
 }
 
 void WebServerManager::handleUIDRegistrationPage() {
-    _server.sendHeader("Access-Control-Allow-Origin", "*");
     _server.send_P(200, "text/html", UID_REGISTRATION_HTML);
 }
 
 void WebServerManager::handleLogViewer() {
-    _server.sendHeader("Access-Control-Allow-Origin", "*");
     _server.send_P(200, "text/html", LOG_VIEWER_HTML);
 }
 
 void WebServerManager::handleApiLogs() {
-    _server.sendHeader("Access-Control-Allow-Origin", "*");
     char* buf = (char*)malloc(4097);
     if (!buf) {
         _server.send(500, "text/plain", "out of memory");
@@ -300,14 +279,12 @@ void WebServerManager::handleApiLogs() {
 }
 
 void WebServerManager::handleApiLogsClear() {
-    _server.sendHeader("Access-Control-Allow-Origin", "*");
     LogBuffer::getInstance().clear();
     _server.send(200, "application/json", "{\"success\":true}");
 }
 
 void WebServerManager::handleApiRegisterUid() {
     Serial.println("WebServerManager: POST /api/register-uid received");
-    _server.sendHeader("Access-Control-Allow-Origin", "*");
 
     StaticJsonDocument<1024> doc;
     DeserializationError err = deserializeJson(doc, _server.arg("plain"));
@@ -482,7 +459,6 @@ void WebServerManager::handleApiRegisterUid() {
 // ---------------------------------------------------------------------------
 
 void WebServerManager::handleApiSpoolmanSpools() {
-    _server.sendHeader("Access-Control-Allow-Origin", "*");
 
     const char* baseUrl = ConfigurationManager::getInstance().getSpoolmanURL();
     if (!baseUrl || strlen(baseUrl) == 0) {
@@ -535,7 +511,6 @@ void WebServerManager::handleApiSpoolmanSpools() {
 }
 
 void WebServerManager::handleApiSpoolmanLink() {
-    _server.sendHeader("Access-Control-Allow-Origin", "*");
 
     StaticJsonDocument<256> doc;
     DeserializationError err = deserializeJson(doc, _server.arg("plain"));
@@ -620,7 +595,6 @@ void WebServerManager::handleApiSpoolmanLink() {
 }
 
 void WebServerManager::handleApiSpoolmanPendingLink() {
-    _server.sendHeader("Access-Control-Allow-Origin", "*");
 
     StaticJsonDocument<128> doc;
     if (deserializeJson(doc, _server.arg("plain"))) {
@@ -640,7 +614,6 @@ void WebServerManager::handleApiSpoolmanPendingLink() {
 }
 
 void WebServerManager::handleApiDiagnostics() {
-    _server.sendHeader("Access-Control-Allow-Origin", "*");
 
     // 1536: task stack-hwm entries added on top of the original 1024 payload
     StaticJsonDocument<1536> doc;
@@ -738,7 +711,6 @@ void WebServerManager::handleApiDiagnostics() {
 // ---------------------------------------------------------------------------
 
 void WebServerManager::handleApiGetConfig() {
-    _server.sendHeader("Access-Control-Allow-Origin", "*");
 
     ConfigUpdate cfg;
     ConfigurationManager::getInstance().getCurrentConfig(cfg);
@@ -787,7 +759,6 @@ void WebServerManager::handleApiGetConfig() {
 }
 
 void WebServerManager::handleApiPostConfig() {
-    _server.sendHeader("Access-Control-Allow-Origin", "*");
 
     StaticJsonDocument<1024> doc;
     DeserializationError err = deserializeJson(doc, _server.arg("plain"));
@@ -881,7 +852,6 @@ void WebServerManager::handleApiPostConfig() {
 // ---------------------------------------------------------------------------
 
 void WebServerManager::handleApiVersion() {
-    _server.sendHeader("Access-Control-Allow-Origin", "*");
     StaticJsonDocument<128> doc;
     doc["version"] = FIRMWARE_VERSION;
 #ifdef BOARD_ESP32_S3
@@ -926,7 +896,6 @@ void WebServerManager::handleApiUploadFirmwareChunk() {
 }
 
 void WebServerManager::handleApiUploadFirmwareComplete() {
-    _server.sendHeader("Access-Control-Allow-Origin", "*");
     if (Update.hasError()) {
         NFCManager::getInstance().resumeScanTask();
         _server.send(500, "application/json", "{\"success\":false,\"error\":\"Update failed\"}");
@@ -951,7 +920,6 @@ void WebServerManager::handleApiUploadFirmwareComplete() {
 // ---------------------------------------------------------------------------
 
 void WebServerManager::handleApiUpdateFromUrl() {
-    _server.sendHeader("Access-Control-Allow-Origin", "*");
 
     if (_otaState == OtaState::DOWNLOADING || _otaState == OtaState::FLASHING) {
         sendError(409, "Update already in progress");
@@ -1094,7 +1062,6 @@ void WebServerManager::otaDownloadTask(void* param) {
 }
 
 void WebServerManager::handleApiOtaStatus() {
-    _server.sendHeader("Access-Control-Allow-Origin", "*");
     StaticJsonDocument<128> doc;
 
     switch (_otaState) {
@@ -1304,7 +1271,6 @@ void WebServerManager::serializeEnrichment(JsonDocument& doc) {
 // ── /api/status ─────────────────────────────────────────────
 
 void WebServerManager::handleApiStatus() {
-    _server.sendHeader("Access-Control-Allow-Origin", "*");
 
     CurrentSpoolState state;
     StaticJsonDocument<1536> doc;
@@ -1352,7 +1318,6 @@ void WebServerManager::handleApiStatus() {
 
 void WebServerManager::handleApiWriteTag() {
     Serial.println("WebServerManager: POST /api/write-tag received");
-    _server.sendHeader("Access-Control-Allow-Origin", "*");
 
     StaticJsonDocument<512> doc;
     DeserializationError err = deserializeJson(doc, _server.arg("plain"));
@@ -1489,7 +1454,6 @@ void WebServerManager::handleApiWriteTag() {
 
 void WebServerManager::handleApiFormatTag() {
     Serial.println("WebServerManager: POST /api/format-tag received");
-    _server.sendHeader("Access-Control-Allow-Origin", "*");
 
     // Optional body: {"uid": "..."} to validate tag before formatting
     char uid[17] = {0};
@@ -1520,7 +1484,6 @@ void WebServerManager::handleApiFormatTag() {
 
 void WebServerManager::handleApiWriteTigerTag() {
     Serial.println("WebServerManager: POST /api/write-tigertag received");
-    _server.sendHeader("Access-Control-Allow-Origin", "*");
 
     StaticJsonDocument<256> doc;
     DeserializationError err = deserializeJson(doc, _server.arg("plain"));
@@ -1613,7 +1576,6 @@ void WebServerManager::handleApiWriteTigerTag() {
 
 void WebServerManager::handleApiWriteOpenTag3D() {
     Serial.println("WebServerManager: POST /api/write-opentag3d received");
-    _server.sendHeader("Access-Control-Allow-Origin", "*");
 
     StaticJsonDocument<512> doc;
     DeserializationError err = deserializeJson(doc, _server.arg("plain"));
@@ -1712,7 +1674,6 @@ void WebServerManager::handleApiWriteOpenTag3D() {
 
 void WebServerManager::handleApiWriteOpenSpool() {
     Serial.println("WebServerManager: POST /api/write-openspool received");
-    _server.sendHeader("Access-Control-Allow-Origin", "*");
 
     StaticJsonDocument<256> doc;
     DeserializationError err = deserializeJson(doc, _server.arg("plain"));
@@ -1756,7 +1717,6 @@ void WebServerManager::handleApiWriteOpenSpool() {
 // ---------------------------------------------------------------------------
 
 void WebServerManager::handleApiSpoolmanFindVendor() {
-    _server.sendHeader("Access-Control-Allow-Origin", "*");
     String name = _server.arg("name");
     if (name.isEmpty()) {
         _server.send(400, "application/json", "{\"error\":\"name required\"}");
@@ -1823,7 +1783,6 @@ void WebServerManager::handleApiSpoolmanFindVendor() {
 }
 
 void WebServerManager::handleApiSpoolmanFindFilament() {
-    _server.sendHeader("Access-Control-Allow-Origin", "*");
     String vendorId = _server.arg("vendor_id");
     String material = _server.arg("material");
     String colorHex = _server.arg("color_hex");
@@ -2171,7 +2130,6 @@ int WebServerManager::enrichCreateSpool(WiFiClient& client, HTTPClient& http, co
 // ── /api/spoolman/save-enrichment ───────────────────────────
 
 void WebServerManager::handleApiSpoolmanSaveEnrichment() {
-    _server.sendHeader("Access-Control-Allow-Origin", "*");
 
     StaticJsonDocument<512> doc;
     if (deserializeJson(doc, _server.arg("plain"))) {
@@ -2284,7 +2242,6 @@ void WebServerManager::handleApiSpoolmanSaveEnrichment() {
 // ---------------------------------------------------------------------------
 
 void WebServerManager::sendError(int code, const char* msg) {
-    _server.sendHeader("Access-Control-Allow-Origin", "*");
     // Escape quotes, backslashes, and control chars for valid JSON
     char escaped[192];
     size_t j = 0;
