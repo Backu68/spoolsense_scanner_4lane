@@ -1,6 +1,12 @@
 # Changelog
 
-## [Unreleased]
+## [1.7.7] - 2026-07-06
+
+### Added
+
+- **Configurable status LED pin** — new optional `led_pin` setting on the config page (Hardware section). Empty means the board default; overrides are validated against per-board rules (strap pins, flash pins, input-only pins, PSRAM-reserved pins, NFC reader pins, and enabled-feature pins) at the NVS boundary and fall back to the default with a serial warning if invalid. (#203, closes #196)
+- **Heap and per-task stack instrumentation** — every FreeRTOS task now self-reports its stack high-water mark, logged with heap stats (free / min-ever / largest block) as `MEM:` lines every 60s on serial and the `/logs` web viewer. `/api/diagnostics` gains `min_free_bytes` and a per-task `stack_hwm_bytes` map. Baseline for the memory-recovery work: heap changes are validated against measured numbers from here on.
+- **Tag writes verified by readback** — TigerTag, OpenTag3D, and OpenSpool writes re-read the written pages and compare against the intended data after every reported success. A mismatch triggers one full-rewrite recovery, then fails loudly instead of reporting success on a corrupted write. Matters more now that the ACK fix is nibble-permissive: the 4-bit ACK carries no CRC, so a noise byte can read as success. (#167)
 
 ### Improved
 
@@ -11,14 +17,6 @@
 - **Filament-search API streams** — the enrichment page's filament finder pull-parses the filament list and then fetches only the matched filament, replacing a 4KB list parse. It now prefers the canonical (bare-named) filament for a material+color over the first list-order match, and reports lookup failures as errors instead of "not found".
 - **Spool picker proxy is chunked-transfer safe** — the spool list pass-through now requests HTTP/1.0, so a Spoolman behind a reverse proxy that chunks responses no longer risks chunk framing corrupting the relayed JSON.
 - **`/api/diagnostics` reports the last reset reason** — `reset_reason` field (e.g. `poweron`, `panic`, `task_wdt`, `brownout`) so field devices can distinguish crashes from power cycles without serial access.
-
-## [1.7.7] - 2026-07-06
-
-### Added
-
-- **Configurable status LED pin** — new optional `led_pin` setting on the config page (Hardware section). Empty means the board default; overrides are validated against per-board rules (strap pins, flash pins, input-only pins, PSRAM-reserved pins, NFC reader pins, and enabled-feature pins) at the NVS boundary and fall back to the default with a serial warning if invalid. (#203, closes #196)
-- **Heap and per-task stack instrumentation** — every FreeRTOS task now self-reports its stack high-water mark, logged with heap stats (free / min-ever / largest block) as `MEM:` lines every 60s on serial and the `/logs` web viewer. `/api/diagnostics` gains `min_free_bytes` and a per-task `stack_hwm_bytes` map. Baseline for the memory-recovery work: heap changes are validated against measured numbers from here on.
-- **Tag writes verified by readback** — TigerTag, OpenTag3D, and OpenSpool writes re-read the written pages and compare against the intended data after every reported success. A mismatch triggers one full-rewrite recovery, then fails loudly instead of reporting success on a corrupted write. Matters more now that the ACK fix is nibble-permissive: the 4-bit ACK carries no CRC, so a noise byte can read as success. (#167)
 
 ### Fixed
 
