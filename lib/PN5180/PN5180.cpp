@@ -454,7 +454,7 @@ bool PN5180::setRF_on() {
     unsigned long t = millis();
     while (0 == (TX_RFON_IRQ_STAT & getIRQStatus())) { // wait for RF field to set up
       if (millis() - t > 500) {
-        PN5180DEBUG(F("TIMEOUT waiting for TX_RFON_IRQ\n"));
+        Serial.println("PN5180: TIMEOUT TX_RFON_IRQ");
         return false;
       }
     }
@@ -481,7 +481,7 @@ bool PN5180::setRF_off() {
     unsigned long t = millis();
     while (0 == (TX_RFOFF_IRQ_STAT & getIRQStatus())) { // wait for RF field to shut down
       if (millis() - t > 500) {
-        PN5180DEBUG(F("TIMEOUT waiting for TX_RFOFF_IRQ\n"));
+        Serial.println("PN5180: TIMEOUT TX_RFOFF_IRQ");
         return false;
       }
     }
@@ -543,7 +543,7 @@ bool PN5180::transceiveCommand(uint8_t *sendBuffer, size_t sendBufferLen, uint8_
     unsigned long t = millis();
     while (LOW != digitalRead(PN5180_BUSY)) { // wait until busy is low
       if (millis() - t > 1000) {
-        PN5180DEBUG(F("TIMEOUT waiting for BUSY LOW (pre-send)\n"));
+        Serial.println("PN5180: TIMEOUT BUSY-LOW pre-send");
         return false;
       }
     }
@@ -559,7 +559,7 @@ bool PN5180::transceiveCommand(uint8_t *sendBuffer, size_t sendBufferLen, uint8_
     unsigned long t = millis();
     while(HIGH != digitalRead(PN5180_BUSY)) {  // wait until BUSY is high
       if (millis() - t > 1000) {
-        PN5180DEBUG(F("TIMEOUT waiting for BUSY HIGH (post-send)\n"));
+        Serial.println("PN5180: TIMEOUT BUSY-HIGH post-send");
         digitalWrite(PN5180_NSS, HIGH);
         return false;
       }
@@ -572,7 +572,7 @@ bool PN5180::transceiveCommand(uint8_t *sendBuffer, size_t sendBufferLen, uint8_
     unsigned long t = millis();
     while (LOW != digitalRead(PN5180_BUSY)) { // wait until BUSY is low
       if (millis() - t > 1000) {
-        PN5180DEBUG(F("TIMEOUT waiting for BUSY LOW (post-send)\n"));
+        Serial.println("PN5180: TIMEOUT BUSY-LOW post-send");
         return false;
       }
     }
@@ -594,7 +594,7 @@ bool PN5180::transceiveCommand(uint8_t *sendBuffer, size_t sendBufferLen, uint8_
     unsigned long t = millis();
     while(HIGH != digitalRead(PN5180_BUSY)) {  // wait until BUSY is high
       if (millis() - t > 1000) {
-        PN5180DEBUG(F("TIMEOUT waiting for BUSY HIGH (post-recv)\n"));
+        Serial.println("PN5180: TIMEOUT BUSY-HIGH post-recv");
         digitalWrite(PN5180_NSS, HIGH);
         return false;
       }
@@ -607,7 +607,7 @@ bool PN5180::transceiveCommand(uint8_t *sendBuffer, size_t sendBufferLen, uint8_
     unsigned long t = millis();
     while(LOW != digitalRead(PN5180_BUSY)) {  // wait until BUSY is low
       if (millis() - t > 1000) {
-        PN5180DEBUG(F("TIMEOUT waiting for BUSY LOW (post-recv)\n"));
+        Serial.println("PN5180: TIMEOUT BUSY-LOW post-recv");
         return false;
       }
     }
@@ -637,7 +637,7 @@ bool PN5180::reset() {
   unsigned long t = millis();
   while (0 == (IDLE_IRQ_STAT & getIRQStatus())) { // wait for system to start up
     if (millis() - t > 1000) {
-      PN5180DEBUG(F("TIMEOUT waiting for IDLE_IRQ after reset\n"));
+      Serial.println("PN5180: TIMEOUT IDLE_IRQ after reset");
       return false;
     }
   }
