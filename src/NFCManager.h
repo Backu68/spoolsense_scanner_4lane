@@ -217,6 +217,7 @@ private:
     static constexpr uint32_t NFC_WDT_TIMEOUT_S = 30;     // Task watchdog timeout
     uint32_t consecutiveFailures_ = 0;
     void attemptRecovery();
+    void reportWdtPhaseIfCrashed();  // wdt forensics: print pre-reset scan phase
 
     // Write batch tracking: prevents tag re-reads during batched writes
     volatile bool suppressReDetection_ = false;

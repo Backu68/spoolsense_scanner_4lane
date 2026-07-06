@@ -335,8 +335,10 @@ uint16_t HardwareNFCConnection::readISO14443Pages(uint8_t startPage, uint8_t pag
 
     // mifareBlockRead reads 16 bytes (4 pages) per call; read in 4-page chunks starting from startPage
     uint16_t bytesRead = 0;
+    extern volatile uint32_t g_nfcScanPhasePage;
     for (uint8_t page = startPage; page < startPage + pageCount; page += 4) {
         feedTaskWatchdog();
+        g_nfcScanPhasePage = page;
         uint8_t block[16] = {0};
         if (!iso14443a_->mifareBlockRead(page, block)) {
             Serial.printf("HardwareNFC: readISO14443Pages - read failed at page %d\n", page);
