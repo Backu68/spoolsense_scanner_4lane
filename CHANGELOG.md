@@ -5,6 +5,7 @@
 ### Security
 
 - **Web API is same-origin only** — removed the `Access-Control-Allow-Origin: *` header from every endpoint and the development-era CORS preflight handler. The scanner serves its own UI, so browsers enforce same-origin automatically; the wildcard let any website a browser on your LAN visited call the scanner's API (including config changes and OTA). Verified nothing legitimate depends on cross-origin access: the spoolsense.org web flasher uses WebSerial, the middleware panel calls its own origin, and the mobile app's native HTTP client is unaffected by CORS.
+- **OTA-by-URL restricted to SpoolSense releases** — `/api/update-from-url` now rejects any URL outside `https://github.com/SpoolSense/`. Previously anyone on the LAN could point the scanner at an arbitrary firmware binary. (TLS certificate pinning deliberately deferred to the signed-manifest work: pinning GitHub's rotating roots risks bricking field OTA.)
 
 ### Added
 

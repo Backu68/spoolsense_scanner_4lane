@@ -939,6 +939,17 @@ void WebServerManager::handleApiUpdateFromUrl() {
         return;
     }
 
+    // OTA is locked to this project's GitHub releases. The update page only
+    // ever posts browser_download_url values from the GitHub API, and the
+    // HTTPS redirect target (objects.githubusercontent.com) is chosen by
+    // GitHub, not the caller. Anything else gets rejected — without this,
+    // anyone on the LAN could flash arbitrary firmware by URL.
+    static const char OTA_ALLOWED_PREFIX[] = "https://github.com/SpoolSense/";
+    if (strncmp(url, OTA_ALLOWED_PREFIX, sizeof(OTA_ALLOWED_PREFIX) - 1) != 0) {
+        sendError(403, "OTA URL must be a SpoolSense GitHub release");
+        return;
+    }
+
     // Store URL and kick off background task
     strncpy(_otaUrl, url, sizeof(_otaUrl) - 1);
     _otaState = OtaState::DOWNLOADING;
