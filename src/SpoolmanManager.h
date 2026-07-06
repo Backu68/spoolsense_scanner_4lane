@@ -58,17 +58,32 @@ public:
     // Set before write flow starts; consumed on first tag sync within PENDING_LINK_TIMEOUT_MS.
     void setPendingLink(int32_t spoolId);
 
+    // Snapshot of a spool's identity-relevant state from one bounded GET —
+    // feeds both resolution (archived/nfc_id/link) and reconciliation
+    // (filament identity, remaining weight) so the sync path fetches once.
+    struct SpoolCore {
+        bool archived = false;
+        bool userLinked = false;
+        int32_t filamentId = -1;
+        float remainingWeight = -1.0f;
+        char nfcId[40] = {0};            // stored double-quoted in Spoolman
+        char filamentMaterial[32] = {0};
+        char filamentColor[16] = {0};
+    };
+
     // Result of resolving "which Spoolman spool does this tag denote" (#224).
-    // Provenance matters: user-linked spools are authoritative and must never
-    // be auto-archived or re-pointed; lookupFailed means transport/parse
-    // failure and callers must NOT create (a failed lookup misread as
-    // not-found mints duplicates — the #218 family).
+    // Provenance matters: user picks and user-linked spools are authoritative
+    // and must never be auto-archived or re-pointed; lookupFailed means
+    // transport/parse failure and callers must NOT create (a failed lookup
+    // misread as not-found mints duplicates — the #218 family).
     struct SpoolResolution {
         int32_t spoolId = -1;      // >= 0 resolved
         int32_t filamentId = -1;   // filament of the resolved spool, -1 unknown
         bool userLinked = false;   // spool carries the nfc_link "user" stamp
         bool lookupFailed = false; // transport/parse failure — do not create
-        enum class Source : uint8_t { None, NfcId, TagId, Cache } source = Source::None;
+        bool coreValid = false;    // core below holds a fresh spool snapshot
+        SpoolCore core;
+        enum class Source : uint8_t { None, UserPick, NfcId, TagId, Cache } source = Source::None;
     };
 
     // THE identity resolver (#224): one precedence for every tag→spool client
@@ -126,14 +141,7 @@ private:
     void taskLoop();
     bool syncSpool(const SpoolmanSyncRequest& req, int& resolvedSpoolmanId);
     bool lookupSpoolByUid(const char* uid, SpoolDetails& outDetails);
-    // Bounded single-spool GET feeding the resolver: archived flag, stored
-    // nfc_id, nfc_link stamp, filament id. Returns false on HTTP/parse failure.
-    struct SpoolCore {
-        bool archived = false;
-        bool userLinked = false;
-        int32_t filamentId = -1;
-        char nfcId[40] = {0};   // stored double-quoted in Spoolman
-    };
+    // Bounded single-spool GET filling SpoolCore. Returns false on HTTP/parse failure.
     bool fetchSpoolCore(int32_t spoolId, SpoolCore& out);
     static bool spoolUsableForUid(const SpoolCore& core, const char* uid);
 

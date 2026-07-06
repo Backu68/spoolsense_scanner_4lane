@@ -1056,36 +1056,26 @@ enum class SpoolReconcileAction {
 // resolve the same physical filament to a different id (user-named filaments,
 // enrichment-created variants, vendor coerced by the tag format's brand field —
 // #218). Only a real material or color change means the tag moved.
-static SpoolReconcileAction reconcileSpool(int existingSpoolId, int newFilamentId,
+static SpoolReconcileAction reconcileSpool(int existingSpoolId,
+                                           const SpoolmanManager::SpoolCore& core,
+                                           int newFilamentId,
                                            const SpoolmanSyncRequest& req) {
-    // Fetch the existing spool's data from Spoolman
-    char path[64];
-    snprintf(path, sizeof(path), "/api/v1/spool/%d", existingSpoolId);
-    String response;
-    int code = httpGet(path, response);
-    if (code != 200) return SpoolReconcileAction::KeepSpool;
-
-    // Heap doc: needs capacity for the nested filament object + extras, and
-    // SpoolmanSync's measured stack floor is under 2KB. Overflow fails to
-    // KeepSpool (never archives on unparseable data).
-    DynamicJsonDocument doc(3072);
-    DeserializationError err = deserializeJson(doc, response);
-    if (err) return SpoolReconcileAction::KeepSpool;
+    // The resolver already fetched this spool's snapshot (one bounded GET
+    // feeds identity and reconciliation) — no second fetch here.
 
     // A user-linked spool (writer picker / explicit re-link) is pinned: never
     // auto-archived or re-pointed, weight still syncs. The tag's identity fields
     // are stale by definition once a user overrides them (#218).
-    const char* linkMark = doc["extra"]["nfc_link"] | "";
-    if (strstr(linkMark, "user") != nullptr) {
+    if (core.userLinked) {
         Serial.printf("SpoolmanManager: Spool %d is user-linked — keeping\n", existingSpoolId);
         return SpoolReconcileAction::KeepSpoolWeightOnly;
     }
 
-    int oldFilamentId = doc["filament"]["id"] | -1;
+    int oldFilamentId = core.filamentId;
     bool idDiffersButSameFilament = false;
     if (oldFilamentId >= 0 && newFilamentId >= 0 && oldFilamentId != newFilamentId) {
-        const char* oldMaterial = doc["filament"]["material"] | "";
-        const char* oldColor    = doc["filament"]["color_hex"] | "";
+        const char* oldMaterial = core.filamentMaterial;
+        const char* oldColor    = core.filamentColor;
         if (oldColor[0] == '#') oldColor++;
         const char* newMaterial = materialTypeToSpoolmanStr(req.material_type);
         char newColor[7];
@@ -1120,7 +1110,7 @@ static SpoolReconcileAction reconcileSpool(int existingSpoolId, int newFilamentI
     static constexpr float LOW_SPOOL_THRESHOLD_G = 100.0f;
     static constexpr float WEIGHT_JUMP_THRESHOLD_G = 500.0f;
 
-    float oldRemaining = doc["remaining_weight"] | -1.0f;
+    float oldRemaining = core.remainingWeight;
     if (oldRemaining >= 0.0f &&
         oldRemaining <= LOW_SPOOL_THRESHOLD_G &&
         req.remaining_weight_g > (oldRemaining + WEIGHT_JUMP_THRESHOLD_G)) {
@@ -1577,11 +1567,18 @@ bool SpoolmanManager::fetchSpoolCore(int32_t spoolId, SpoolCore& out) {
 
     out.archived = doc["archived"] | false;
     out.filamentId = doc["filament"]["id"] | -1;
+    out.remainingWeight = doc["remaining_weight"] | -1.0f;
     const char* link = doc["extra"]["nfc_link"] | "";
     out.userLinked = (strstr(link, "user") != nullptr);
     const char* nfc = doc["extra"]["nfc_id"] | "";
     strncpy(out.nfcId, nfc, sizeof(out.nfcId) - 1);
     out.nfcId[sizeof(out.nfcId) - 1] = '\0';
+    const char* mat = doc["filament"]["material"] | "";
+    strncpy(out.filamentMaterial, mat, sizeof(out.filamentMaterial) - 1);
+    out.filamentMaterial[sizeof(out.filamentMaterial) - 1] = '\0';
+    const char* col = doc["filament"]["color_hex"] | "";
+    strncpy(out.filamentColor, col, sizeof(out.filamentColor) - 1);
+    out.filamentColor[sizeof(out.filamentColor) - 1] = '\0';
     return true;
 }
 
@@ -1609,10 +1606,10 @@ SpoolmanManager::SpoolResolution SpoolmanManager::resolveSpoolByUidNoLock(const 
     if (byNfc >= 0) {
         res.spoolId = byNfc;
         res.source = SpoolResolution::Source::NfcId;
-        SpoolCore core;
-        if (fetchSpoolCore(byNfc, core)) {
-            res.filamentId = core.filamentId;
-            res.userLinked = core.userLinked;
+        if (fetchSpoolCore(byNfc, res.core)) {
+            res.coreValid = true;
+            res.filamentId = res.core.filamentId;
+            res.userLinked = res.core.userLinked;
         }
         storeCachedSpoolmanId(uid, byNfc);
         return res;
@@ -1629,6 +1626,8 @@ SpoolmanManager::SpoolResolution SpoolmanManager::resolveSpoolByUidNoLock(const 
             res.spoolId = tagSpoolmanId;
             res.filamentId = core.filamentId;
             res.userLinked = core.userLinked;
+            res.core = core;
+            res.coreValid = true;
             res.source = SpoolResolution::Source::TagId;
             storeCachedSpoolmanId(uid, tagSpoolmanId);
             return res;
@@ -1649,6 +1648,8 @@ SpoolmanManager::SpoolResolution SpoolmanManager::resolveSpoolByUidNoLock(const 
             res.spoolId = cached;
             res.filamentId = core.filamentId;
             res.userLinked = core.userLinked;
+            res.core = core;
+            res.coreValid = true;
             res.source = SpoolResolution::Source::Cache;
             return res;
         }
@@ -1804,11 +1805,23 @@ bool SpoolmanManager::syncSpool(const SpoolmanSyncRequest& req, int& resolvedSpo
     // (authoritative), then the tag-stored id validated against the live
     // spool, then the validated cache. Everything below acts on its verdict;
     // creation happens only on a clean not-found.
-    SpoolResolution r = resolveSpoolByUidNoLock(req.spool_id, req.spoolman_id);
-    if (r.lookupFailed) {
-        Serial.println("SpoolmanManager: identity resolution failed — aborting sync this cycle");
-        xSemaphoreGive(httpMutex_);
-        return false;
+    // Tier 0: a spool the user picked THIS sync is authoritative — it must
+    // never be outranked, even by a stale duplicate nfc_id claim that the
+    // best-effort cleanup failed to clear (Codex finding on #224).
+    SpoolResolution r;
+    if (justLinkedSpoolId > 0) {
+        r.spoolId = justLinkedSpoolId;
+        r.userLinked = true;
+        r.source = SpoolResolution::Source::UserPick;
+        r.coreValid = fetchSpoolCore(justLinkedSpoolId, r.core);
+        if (r.coreValid) r.filamentId = r.core.filamentId;
+    } else {
+        r = resolveSpoolByUidNoLock(req.spool_id, req.spoolman_id);
+        if (r.lookupFailed) {
+            Serial.println("SpoolmanManager: identity resolution failed — aborting sync this cycle");
+            xSemaphoreGive(httpMutex_);
+            return false;
+        }
     }
 
     // Resolve filament identity — needed both to reconcile an existing spool
@@ -1847,9 +1860,15 @@ bool SpoolmanManager::syncSpool(const SpoolmanSyncRequest& req, int& resolvedSpo
         // Existing spool — reconcile decides keep vs archive-and-replace.
         // A spool the user just picked this sync is never archived/re-pointed;
         // reconcileSpool itself honors the durable nfc_link stamp (#218).
-        SpoolReconcileAction action = (r.spoolId == justLinkedSpoolId)
-            ? SpoolReconcileAction::KeepSpoolWeightOnly
-            : reconcileSpool(r.spoolId, filamentId, req);
+        SpoolReconcileAction action;
+        if (r.spoolId == justLinkedSpoolId || r.source == SpoolResolution::Source::UserPick) {
+            action = SpoolReconcileAction::KeepSpoolWeightOnly;
+        } else if (!r.coreValid) {
+            // No trustworthy snapshot — archive needs positive evidence, keep
+            action = SpoolReconcileAction::KeepSpool;
+        } else {
+            action = reconcileSpool(r.spoolId, r.core, filamentId, req);
+        }
 
         if (action == SpoolReconcileAction::ArchiveAndReplace) {
             if (archiveSpool(r.spoolId)) {
