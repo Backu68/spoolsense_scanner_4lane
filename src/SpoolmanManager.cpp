@@ -6,6 +6,7 @@
 #include <WiFiClient.h>
 #include <ArduinoJson.h>
 #include <json.hpp>
+#include "JsonPullHelpers.h"
 
 #include <Arduino.h>
 #ifndef NATIVE_TEST
@@ -489,44 +490,147 @@ static int findOrCreateVendor(const char* name) {
 // Client-side match: Spoolman's ?material= filter does substring matching (ABS matches PC-ABS).
 // Match on material + color + name. Name includes variant (e.g. "PLA Silk" vs "PLA").
 // Filaments with no name are treated as matching bare material.
-static bool findExactFilament(const char* jsonText, const char* targetMaterial,
-                               const char* targetColorHex, const char* targetName, int& outId) {
-    outId = -1;
-    DynamicJsonDocument doc(8192);
-    if (deserializeJson(doc, jsonText)) return false;
+// Streaming filament search over /api/v1/filament (per-vendor when vendorId > 0,
+// unfiltered otherwise). Pull-parses the HTTP stream with constant memory —
+// replaces an 8KB DOM plus a String holding the entire response body.
+// Single pass captures both tiers of the #218 dedup: exact (material+color+name)
+// wins, else first material+color match. Nested objects (vendor, extra) are
+// skipped by depth guard; field order within an element doesn't matter.
+// Returns id >= 0 match, -1 not found, -2 transport/parse failure — callers
+// must NOT create on -2 or transient errors mint duplicate filaments.
+static int streamFindFilament(int vendorId, const char* targetMaterial,
+                              const char* targetColorHex, const char* targetName) {
+    const char* baseUrl = ConfigurationManager::getInstance().getSpoolmanURL();
+    char url[256];
+    if (vendorId > 0) {
+        snprintf(url, sizeof(url), "%s/api/v1/filament?vendor_id=%d", baseUrl, vendorId);
+    } else {
+        snprintf(url, sizeof(url), "%s/api/v1/filament", baseUrl);
+    }
 
-    JsonArray arr = doc.as<JsonArray>();
+    WiFiClient streamClient;
+    HTTPClient streamHttp;
+    streamHttp.useHTTP10(true);
+    streamHttp.begin(streamClient, url);
+    streamHttp.setTimeout(10000);
+    if (streamHttp.GET() != 200) {
+        streamHttp.end();
+        return -2;
+    }
+
+    HttpClientStream stm(*streamHttp.getStreamPtr());
+    json_reader reader(stm);
+
+    // Empty target color = wildcard (enrichment pages may omit color)
+    const bool colorWildcard = (targetColorHex[0] == '\0');
+
+    int exactId = -1;
     int looseId = -1;  // first material+color match regardless of name
-    for (JsonObject obj : arr) {
-        const char* mat = obj["material"] | "";
-        const char* color = obj["color_hex"] | "";
-        if (color[0] == '#') color++;
-        if (strcasecmp(mat, targetMaterial) != 0) continue;
-        // RGB-only compare — Spoolman color_hex may carry an alpha suffix
-        if (strlen(color) < 6 || strncasecmp(color, targetColorHex, 6) != 0) continue;
+    bool sawAnyNode = false;
+    bool parseError = false;
+    bool inElement = false;
+    int nestLevel = 0;  // containers nested INSIDE the current element (vendor, extra, ...)
+    int curId = -1;
+    char curMaterial[32], curColor[16], curName[64];
+    curMaterial[0] = curColor[0] = curName[0] = '\0';
 
-        if (looseId < 0) looseId = obj["id"] | -1;
+    // Nesting is tracked with an explicit counter instead of reader.depth()
+    // comparisons — end_object depth semantics are an implementation detail we
+    // refuse to depend on (a nested end_object must not close the element).
+    while (reader.read()) {
+        sawAnyNode = true;
+        json_node_type nt = reader.node_type();
+        if (nt == json_node_type::error) { parseError = true; break; }
 
-        const char* objName = obj["name"] | "";
-        if (targetName[0] != '\0') {
-            const char* nameToCheck = (objName[0] != '\0') ? objName : mat;
-            if (strcasecmp(nameToCheck, targetName) != 0) continue;
-        } else if (objName[0] != '\0' && strcasecmp(objName, mat) != 0) {
+        if (!inElement) {
+            if (nt == json_node_type::object) {
+                inElement = true;
+                nestLevel = 0;
+                curId = -1;
+                curMaterial[0] = curColor[0] = curName[0] = '\0';
+            }
             continue;
         }
 
-        outId = obj["id"] | -1;
-        return (outId >= 0);
+        if (nt == json_node_type::object || nt == json_node_type::array) {
+            nestLevel++;
+            continue;
+        }
+        if (nt == json_node_type::end_object || nt == json_node_type::end_array) {
+            if (nestLevel > 0) { nestLevel--; continue; }
+            // The element's own closing brace — evaluate against both tiers
+            const char* color = curColor;
+            if (color[0] == '#') color++;
+            bool sameMaterial = (curMaterial[0] != '\0') &&
+                                (strcasecmp(curMaterial, targetMaterial) == 0);
+            // RGB-only compare — Spoolman color_hex may carry an alpha suffix
+            bool sameColor = colorWildcard ||
+                             ((strlen(color) >= 6) &&
+                              (strncasecmp(color, targetColorHex, 6) == 0));
+            if (sameMaterial && sameColor && curId >= 0) {
+                if (looseId < 0) looseId = curId;
+                bool exact;
+                if (targetName[0] != '\0') {
+                    const char* nameToCheck = (curName[0] != '\0') ? curName : curMaterial;
+                    exact = (strcasecmp(nameToCheck, targetName) == 0);
+                } else {
+                    exact = (curName[0] == '\0') || (strcasecmp(curName, curMaterial) == 0);
+                }
+                if (exact) {
+                    exactId = curId;
+                    break;  // best possible match — stop streaming
+                }
+            }
+            inElement = false;
+            continue;
+        }
+
+        // Top-level fields of the element only (nestLevel 0); fields inside
+        // vendor/extra arrive with nestLevel > 0 and are ignored
+        if (nt == json_node_type::field && nestLevel == 0) {
+            char fieldName[16];
+            const char* fv = reader.value();
+            strncpy(fieldName, fv ? fv : "", sizeof(fieldName) - 1);
+            fieldName[sizeof(fieldName) - 1] = '\0';
+            if (!reader.read()) break;
+            json_node_type vt = reader.node_type();
+            if (vt == json_node_type::error) { parseError = true; break; }
+            if (vt == json_node_type::object || vt == json_node_type::array) {
+                // Field value is a container (vendor, extra) — count it so its
+                // closing brace decrements instead of ending the element
+                nestLevel++;
+                continue;
+            }
+            if (strcmp(fieldName, "id") == 0) {
+                readIntValue(reader, curId);
+            } else if (strcmp(fieldName, "material") == 0) {
+                readStringValue(reader, curMaterial, sizeof(curMaterial));
+            } else if (strcmp(fieldName, "color_hex") == 0) {
+                readStringValue(reader, curColor, sizeof(curColor));
+            } else if (strcmp(fieldName, "name") == 0) {
+                readStringValue(reader, curName, sizeof(curName));
+            }
+        }
+    }
+    bool truncated = (reader.error() != json_error::none);
+    streamHttp.end();
+
+    // Parse errors and truncated streams must not read as "not found" — the
+    // consumers create on not-found, and creating on a failed lookup mints
+    // duplicates (#218 family)
+    if (parseError || (!sawAnyNode) || (exactId < 0 && truncated)) {
+        Serial.println("SpoolmanManager: streamFindFilament parse/transport failure");
+        return -2;
     }
 
-    // No exact name match — fall back to material+color. User-named filaments
-    // ("Ship PLA Red") are the same physical filament; name is display-only (#218).
+    if (exactId >= 0) return exactId;
     if (looseId >= 0) {
+        // User-named filaments ("Ship PLA Red") are the same physical filament;
+        // name is display-only (#218)
         Serial.printf("SpoolmanManager: Name mismatch, matched filament id=%d by material+color\n", looseId);
-        outId = looseId;
-        return true;
+        return looseId;
     }
-    return false;
+    return -1;
 }
 
 static int16_t avgTemp(int16_t minT, int16_t maxT) {
@@ -551,14 +655,17 @@ static int findOrCreateFilament(int vendorId, const SpoolmanSyncRequest& req) {
         filamentName[sizeof(filamentName) - 1] = '\0';
     }
 
-    // Fetch all filaments for vendor — Spoolman's ?material= filter is unreliable (#92)
-    char path[128];
-    snprintf(path, sizeof(path), "/api/v1/filament?vendor_id=%d", vendorId);
-    String response;
-    int code = httpGet(path, response);
-    if (code == 200) {
-        int id = -1;
-        if (findExactFilament(response.c_str(), material, colorHex, filamentName, id)) {
+    // Streaming search — Spoolman's ?material= filter is unreliable (#92), and the
+    // old fetch-whole-list approach cost a body String plus an 8KB DOM per lookup
+    {
+        int id = streamFindFilament(vendorId, material, colorHex, filamentName);
+        if (id == -2) {
+            // Transient lookup failure — creating now would mint a duplicate of a
+            // filament we simply couldn't see (#218 family)
+            Serial.println("SpoolmanManager: Filament lookup failed — skipping create this sync");
+            return -2;
+        }
+        if (id >= 0) {
             Serial.printf("SpoolmanManager: Found filament material=%s color=#%s id=%d\n", material, colorHex, id);
 
             // Fill in blank fields on existing filament — Spoolman is source of truth,
@@ -686,7 +793,7 @@ static int findOrCreateFilament(int vendorId, const SpoolmanSyncRequest& req) {
     serializeJson(createDoc, body);
 
     String createResp;
-    code = httpPost("/api/v1/filament", body.c_str(), createResp);
+    int code = httpPost("/api/v1/filament", body.c_str(), createResp);
     if (code == 200 || code == 201) {
         int id = -1;
         if (parseIdFromObject(createResp.c_str(), id)) {
@@ -1397,6 +1504,11 @@ void SpoolmanManager::setPendingLink(int32_t spoolId) {
     pendingLinkSetAt_.store(millis());
     pendingLinkSpoolId_.store(spoolId);
     Serial.printf("SpoolmanManager: Pending link set for spool %d\n", spoolId);
+}
+
+int SpoolmanManager::findFilamentNoLock(int vendorId, const char* material,
+                                        const char* colorHex6, const char* name) {
+    return streamFindFilament(vendorId, material, colorHex6, name ? name : "");
 }
 
 int SpoolmanManager::findSpoolIdByUidNoLock(const char* uid) {

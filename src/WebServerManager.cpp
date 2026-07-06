@@ -1993,39 +1993,17 @@ int WebServerManager::enrichFindOrCreateFilament(WiFiClient& client, HTTPClient&
     char url[256];
     int filamentId = -1;
 
-    // Search existing filaments — client-side match (#92). When the vendor is
-    // unknown, search unfiltered rather than skipping: blind-creating here made
-    // vendorless duplicates that ping-ponged with the sync path (#218).
+    // Streaming search — constant memory, replaces an 8KB DOM + full-body String
+    // (#92 client-side matching preserved). When the vendor is unknown, search
+    // unfiltered rather than skipping: blind-creating here made vendorless
+    // duplicates that ping-ponged with the sync path (#218). Caller holds
+    // g_httpMutex, which the NoLock search requires.
     if (!declinedMatch) {
-        if (vendorId > 0) {
-            snprintf(url, sizeof(url), "%s/api/v1/filament?vendor_id=%d", baseUrl, vendorId);
-        } else {
-            snprintf(url, sizeof(url), "%s/api/v1/filament", baseUrl);
-        }
-        http.begin(client, url);
-        http.setTimeout(5000);
-        int code = http.GET();
-        if (code == 200) {
-            String response = http.getString();
-            DynamicJsonDocument fDoc(8192);
-            if (!deserializeJson(fDoc, response)) {
-                const char* colorCmp = colorHex;
-                if (colorCmp[0] == '#') colorCmp++;
-                for (JsonObject f : fDoc.as<JsonArray>()) {
-                    if (strcasecmp(f["material"] | "", material) != 0) continue;
-                    if (colorHex[0] != '\0') {
-                        const char* fc = f["color_hex"] | "";
-                        if (fc[0] == '#') fc++;
-                        // RGB-only compare — Spoolman color_hex may carry an alpha suffix
-                        if (strlen(fc) < 6 || strncasecmp(fc, colorCmp, 6) != 0) continue;
-                    }
-                    filamentId = f["id"] | -1;
-                    break;
-                }
-            }
-        }
-        http.end();
-
+        const char* colorCmp = colorHex;
+        if (colorCmp[0] == '#') colorCmp++;
+        // Empty color = wildcard, matching the old DOM matcher's behavior
+        filamentId = SpoolmanManager::getInstance().findFilamentNoLock(vendorId, material, colorCmp, material);
+        if (filamentId == -2) return -2;  // lookup failed — caller must not create
         if (filamentId >= 0) return filamentId;
     }
 

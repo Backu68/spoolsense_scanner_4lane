@@ -64,6 +64,12 @@ public:
     // failed (transport/parse) — callers must not create on -2.
     int findSpoolIdByUidNoLock(const char* uid);
 
+    // Streaming filament search (per-vendor when vendorId > 0, unfiltered
+    // otherwise); tiered match: exact material+color+name, else material+color.
+    // Does NOT take the HTTP mutex — caller must hold g_httpMutex. Returns
+    // id >= 0, -1 not found, -2 lookup failed — callers must not create on -2.
+    int findFilamentNoLock(int vendorId, const char* material, const char* colorHex6, const char* name);
+
     // Deduct weight directly in Spoolman for non-writable tags.
     // Returns grams deducted, or 0 on failure (caller should retry later).
     float deductFromSpoolman(const char* uid, float grams);
