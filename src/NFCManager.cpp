@@ -1,4 +1,5 @@
 #include "NFCManager.h"
+#include <esp_system.h>
 #include "ConversionUtils.h"
 #include "TigerTagParser.h"
 #include "OpenSpoolParser.h"
@@ -193,11 +194,31 @@ void NFCManager::startScanTask() {
         1  // Run on core 1
     );
     Serial.println("NFCManager: Scan task started");
+    reportWdtPhaseIfCrashed();
 }
 
 void NFCManager::scanTaskFunc(void* param) {
     NFCManager* self = static_cast<NFCManager*>(param);
     self->scanLoop();
+}
+
+// ── Watchdog forensics ──────────────────────────────────────
+// Where exactly is the scan task when the 30s task watchdog kills it?
+// RTC-noinit survives the wdt reset, so the next boot reports the phase.
+RTC_NOINIT_ATTR volatile uint32_t g_nfcScanPhase;
+RTC_NOINIT_ATTR volatile uint32_t g_nfcScanPhasePage;
+#define SCAN_PHASE(n) (g_nfcScanPhase = (n))
+#define SCAN_PHASE_PAGE(p) (g_nfcScanPhasePage = (p))
+
+void NFCManager::reportWdtPhaseIfCrashed() {
+    if (esp_reset_reason() == ESP_RST_TASK_WDT) {
+        Serial.printf("NFCManager: PREVIOUS BOOT DIED IN SCAN PHASE %lu (page marker %lu)\n",
+                      (unsigned long)g_nfcScanPhase, (unsigned long)g_nfcScanPhasePage);
+        LogBuffer::getInstance().logPrintf("WDT death: scan phase %lu page %lu\n",
+                      (unsigned long)g_nfcScanPhase, (unsigned long)g_nfcScanPhasePage);
+    }
+    g_nfcScanPhase = 0;
+    g_nfcScanPhasePage = 0;
 }
 
 // ── NDEF helpers ────────────────────────────────────────────
@@ -308,7 +329,9 @@ void NFCManager::readAndProcessISO14443Tag(const uint8_t* uid, uint8_t uidLength
     memset(&ot3dData, 0, sizeof(ot3dData));
 
     uint8_t pageData[40] = {0};
+    SCAN_PHASE(20);
     uint16_t bytesRead = connection_->readISO14443Pages(4, 10, pageData, sizeof(pageData), true);
+    SCAN_PHASE(21);
 
     // Try TigerTag first (binary magic at offset 0)
     if (bytesRead >= 14 && tigerTagCheckMagic(pageData, bytesRead)) {
@@ -327,6 +350,7 @@ void NFCManager::readAndProcessISO14443Tag(const uint8_t* uid, uint8_t uidLength
             const char* ot3dMime = OT3D_MIME_TYPE;
             if (rec.mimeLen == strlen(ot3dMime) && memcmp(rec.mimeType, ot3dMime, rec.mimeLen) == 0) {
                 uint8_t payload[OT3D_EXTENDED_MIN];
+                SCAN_PHASE(22);
                 uint16_t payloadBytes = readNdefPayload(rec, pageData, bytesRead, payload, sizeof(payload));
                 if (payloadBytes >= OT3D_CORE_SIZE) {
                     opentag3d_result_t res = opentag3d_decode(payload, payloadBytes, &ot3dData);
@@ -347,6 +371,7 @@ void NFCManager::readAndProcessISO14443Tag(const uint8_t* uid, uint8_t uidLength
                 const char* jsonMime = "application/json";
                 if (rec.mimeLen == strlen(jsonMime) && memcmp(rec.mimeType, jsonMime, rec.mimeLen) == 0) {
                     uint8_t payload[256];
+                    SCAN_PHASE(23);
                     uint16_t payloadBytes = readNdefPayload(rec, pageData, bytesRead, payload, sizeof(payload));
                     if (payloadBytes > 0 && parseOpenSpool(payload, payloadBytes, openSpoolData)) {
                         isOpenSpool = true;
@@ -357,7 +382,9 @@ void NFCManager::readAndProcessISO14443Tag(const uint8_t* uid, uint8_t uidLength
     }
 
     // All reads done — halt tag if session is still active
+    SCAN_PHASE(24);
     connection_->endTagSession();
+    SCAN_PHASE(25);
 
     // Update shared state under mutex
     if (xSemaphoreTake(tagMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
@@ -483,9 +510,11 @@ bool NFCManager::isSkippableDuplicate(const uint8_t* uid, uint8_t uidLength) {
 
 void NFCManager::handleNewTag(uint8_t* uid, uint8_t uidLength) {
     Serial.println("NFCManager: New spool detected, reading tag...");
+    SCAN_PHASE(10);
     TagScanResult scan = classifyTag(uid, uidLength);
 
     if (scan.kind == TagKind::BambuTag) {
+        SCAN_PHASE(11);
         BambuTagData bambuData;
         bool readOk = readBambuTag(uid, uidLength, bambuData);
 
@@ -527,6 +556,7 @@ void NFCManager::handleNewTag(uint8_t* uid, uint8_t uidLength) {
 
     // ISO14443A: TigerTag, OpenTag3D, OpenSpool, or generic UID
     if (scan.kind == TagKind::GenericUidTag) {
+        SCAN_PHASE(12);
         readAndProcessISO14443Tag(uid, uidLength, scan);
         return;
     }
@@ -542,6 +572,7 @@ void NFCManager::handleNewTag(uint8_t* uid, uint8_t uidLength) {
             vTaskDelay(pdMS_TO_TICKS(100));  // let RF stabilize after reset
         }
         Serial.printf("NFCManager: readAndParseTag attempt %d\n", attempt + 1);
+        SCAN_PHASE(13);
         readOk = readAndParseTag(uid, uidLength);
         Serial.printf("NFCManager: readAndParseTag attempt %d: %s\n", attempt + 1, readOk ? "OK" : "FAILED");
     }
@@ -608,14 +639,17 @@ void NFCManager::scanLoop() {
         esp_task_wdt_reset();
         MemoryDiagnostics::reportSelf(MemoryDiagnostics::Task::NFCScan);
 #endif
+        SCAN_PHASE(1);
         uint8_t uid[8];
         uint8_t uidLength = 0;
 
+        SCAN_PHASE(2);
         if (!prepareRF()) {
             vTaskDelay(pdMS_TO_TICKS(50));
             continue;
         }
 
+        SCAN_PHASE(3);
         if (connection_->detectTag(uid, &uidLength)) {
             absentMisses_ = 0;
             if (!lastSeenValid || memcmp(uid, lastSeenUid, uidLength) != 0) {
@@ -626,14 +660,19 @@ void NFCManager::scanLoop() {
             }
             connection_->setCurrentUid(uid, uidLength);
 
+            SCAN_PHASE(4);
             if (!isSkippableDuplicate(uid, uidLength)) {
+                SCAN_PHASE(5);
                 handleNewTag(uid, uidLength);
             }
+            SCAN_PHASE(6);
             processWriteQueue();
         } else if (!lastSeenValid) {
             // Nothing was present — no debounce needed, keep state cleared
+            SCAN_PHASE(7);
             handleTagAbsent();
         } else if (++absentMisses_ >= TAG_ABSENT_MISS_THRESHOLD) {
+            SCAN_PHASE(8);
             // Debounce removal: single failed reads happen with stationary tags
             // (RF hiccups, marginal coupling). Only declare the tag gone after
             // several consecutive misses, or present/removed flaps every few
@@ -642,6 +681,7 @@ void NFCManager::scanLoop() {
             absentMisses_ = 0;
         }
 
+        SCAN_PHASE(9);
         vTaskDelay(pdMS_TO_TICKS(50));
     }
 }

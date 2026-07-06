@@ -24,7 +24,20 @@
 #include "Debug.h"
 
 // Use HSPI for PN5180 so VSPI is free for TFT display
-static SPIClass pn5180_spi(HSPI);
+// Bus choice is per-target: HSPI is the SPI2 peripheral on classic ESP32 but
+// bus 1 = the SPI3 peripheral on ESP32-S3 — the same host LovyanGFX claims for
+// the TFT (SPI3_HOST) on the S3-DevKitC. Two drivers arbitrating one SPI
+// peripheral corrupts transactions (garbage transceiver states) and can hold
+// the bus indefinitely, starving the scan task into a task_wdt reboot. Boards
+// whose TFT owns SPI2 instead (S3-Zero) override PN5180_SPI_BUS in build flags.
+#ifndef PN5180_SPI_BUS
+  #if CONFIG_IDF_TARGET_ESP32S3
+    #define PN5180_SPI_BUS FSPI  // bus 0 = SPI2 — matches the FSPI pin naming in BoardPins.h
+  #else
+    #define PN5180_SPI_BUS HSPI  // SPI2 on classic ESP32
+  #endif
+#endif
+static SPIClass pn5180_spi(PN5180_SPI_BUS);
 
 // PN5180 1-Byte Direct Commands
 // see 11.4.3.3 Host Interface Command List
@@ -114,10 +127,10 @@ bool PN5180::writeRegister(uint8_t reg, uint32_t value) {
   uint8_t buf[6] = { PN5180_WRITE_REGISTER, reg, p[0], p[1], p[2], p[3] };
 
   pn5180_spi.beginTransaction(PN5180_SPI_SETTINGS);
-  transceiveCommand(buf, 6);
+  bool ok = transceiveCommand(buf, 6);
   pn5180_spi.endTransaction();
 
-  return true;
+  return ok;
 }
 
 /*
@@ -144,10 +157,10 @@ bool PN5180::writeRegisterWithOrMask(uint8_t reg, uint32_t mask) {
   uint8_t buf[6] = { PN5180_WRITE_REGISTER_OR_MASK, reg, p[0], p[1], p[2], p[3] };
 
   pn5180_spi.beginTransaction(PN5180_SPI_SETTINGS);
-  transceiveCommand(buf, 6);
+  bool ok = transceiveCommand(buf, 6);
   pn5180_spi.endTransaction();
 
-  return true;
+  return ok;
 }
 
 /*
@@ -174,10 +187,10 @@ bool PN5180::writeRegisterWithAndMask(uint8_t reg, uint32_t mask) {
   uint8_t buf[6] = { PN5180_WRITE_REGISTER_AND_MASK, reg, p[0], p[1], p[2], p[3] };
 
   pn5180_spi.beginTransaction(PN5180_SPI_SETTINGS);
-  transceiveCommand(buf, 6);
+  bool ok = transceiveCommand(buf, 6);
   pn5180_spi.endTransaction();
 
-  return true;
+  return ok;
 }
 
 /*
@@ -194,9 +207,14 @@ bool PN5180::readRegister(uint8_t reg, uint32_t *value) {
 
   uint8_t cmd[2] = { PN5180_READ_REGISTER, reg };
 
+  *value = 0;  // never leave stale data on a failed transceive
   pn5180_spi.beginTransaction(PN5180_SPI_SETTINGS);
-  transceiveCommand(cmd, 2, (uint8_t*)value, 4);
+  bool ok = transceiveCommand(cmd, 2, (uint8_t*)value, 4);
   pn5180_spi.endTransaction();
+  if (!ok) {
+    *value = 0;
+    return false;
+  }
 
   PN5180DEBUG(F("Register value=0x"));
   PN5180DEBUG(formatHex(*value));
@@ -228,10 +246,10 @@ bool PN5180::readRegister(uint8_t reg, uint32_t *value) {
    }
 
    pn5180_spi.beginTransaction(PN5180_SPI_SETTINGS);
-   transceiveCommand(buffer, len+2);
+   bool ok = transceiveCommand(buffer, len+2);
    pn5180_spi.endTransaction();
 
-   return true;
+   return ok;
  }
 
 /*
@@ -260,8 +278,9 @@ bool PN5180::readEEprom(uint8_t addr, uint8_t *buffer, int len) {
   uint8_t cmd[3] = { PN5180_READ_EEPROM, addr, (uint8_t)len };
 
   pn5180_spi.beginTransaction(PN5180_SPI_SETTINGS);
-  transceiveCommand(cmd, 3, buffer, len);
+  bool eepromOk = transceiveCommand(cmd, 3, buffer, len);
   pn5180_spi.endTransaction();
+  if (!eepromOk) return false;
 
 #ifdef DEBUG
   PN5180DEBUG(F("EEPROM values: "));
@@ -327,10 +346,10 @@ bool PN5180::sendData(uint8_t *data, int len, uint8_t validBits) {
   }
 
   pn5180_spi.beginTransaction(PN5180_SPI_SETTINGS);
-  transceiveCommand(buffer, len+2);
+  bool ok = transceiveCommand(buffer, len+2);
   pn5180_spi.endTransaction();
 
-  return true;
+  return ok;
 }
 
 /*
@@ -359,8 +378,9 @@ uint8_t * PN5180::readData(int len, uint8_t *buffer /* = NULL */) {
   uint8_t cmd[2] = { PN5180_READ_DATA, 0x00 };
 
   pn5180_spi.beginTransaction(PN5180_SPI_SETTINGS);
-  transceiveCommand(cmd, 2, buffer, len);
+  bool readOk = transceiveCommand(cmd, 2, buffer, len);
   pn5180_spi.endTransaction();
+  if (!readOk) return 0L;
 
 #ifdef DEBUG
   PN5180DEBUG(F("Data read: "));
@@ -402,10 +422,10 @@ bool PN5180::loadRFConfig(uint8_t txConf, uint8_t rxConf) {
   uint8_t cmd[3] = { PN5180_LOAD_RF_CONFIG, txConf, rxConf };
 
   pn5180_spi.beginTransaction(PN5180_SPI_SETTINGS);
-  transceiveCommand(cmd, 3);
+  bool ok = transceiveCommand(cmd, 3);
   pn5180_spi.endTransaction();
 
-  return true;
+  return ok;
 }
 
 /*
@@ -447,14 +467,15 @@ bool PN5180::setRF_on() {
   uint8_t cmd[2] = { PN5180_RF_ON, 0x00 };
 
   pn5180_spi.beginTransaction(PN5180_SPI_SETTINGS);
-  transceiveCommand(cmd, 2);
+  bool rfOk = transceiveCommand(cmd, 2);
   pn5180_spi.endTransaction();
+  if (!rfOk) return false;
 
   {
     unsigned long t = millis();
     while (0 == (TX_RFON_IRQ_STAT & getIRQStatus())) { // wait for RF field to set up
       if (millis() - t > 500) {
-        PN5180DEBUG(F("TIMEOUT waiting for TX_RFON_IRQ\n"));
+        Serial.println("PN5180: TIMEOUT TX_RFON_IRQ");
         return false;
       }
     }
@@ -474,14 +495,15 @@ bool PN5180::setRF_off() {
   uint8_t cmd[2] { PN5180_RF_OFF, 0x00 };
 
   pn5180_spi.beginTransaction(PN5180_SPI_SETTINGS);
-  transceiveCommand(cmd, 2);
+  bool rfOffOk = transceiveCommand(cmd, 2);
   pn5180_spi.endTransaction();
+  if (!rfOffOk) return false;
 
   {
     unsigned long t = millis();
     while (0 == (TX_RFOFF_IRQ_STAT & getIRQStatus())) { // wait for RF field to shut down
       if (millis() - t > 500) {
-        PN5180DEBUG(F("TIMEOUT waiting for TX_RFOFF_IRQ\n"));
+        Serial.println("PN5180: TIMEOUT TX_RFOFF_IRQ");
         return false;
       }
     }
@@ -528,7 +550,20 @@ status register contain information on the exception.
  * 5. Wait until BUSY is low
  * If there is a parameter error, the IRQ is set to ACTIVE and a GENERAL_ERROR_IRQ is set.
  */
+// Once a BUSY handshake times out, the PN5180 state machine is wedged and
+// every further transaction will also grind to its full timeout. detectTag
+// chains 15-20 transactions, so grinding turns one scan iteration into 30s+
+// and starves the scan task's watchdog (bench 2026-07-06). Fail everything
+// fast instead until a hardware reset clears the flag — recovery then happens
+// within one 50ms scan cycle.
+static volatile bool pn5180_busWedged = false;
+
+void PN5180::clearBusWedged() {
+  pn5180_busWedged = false;
+}
+
 bool PN5180::transceiveCommand(uint8_t *sendBuffer, size_t sendBufferLen, uint8_t *recvBuffer, size_t recvBufferLen) {
+  if (pn5180_busWedged) return false;
 #ifdef DEBUG
   PN5180DEBUG(F("Sending SPI frame: '"));
   for (uint8_t i=0; i<sendBufferLen; i++) {
@@ -543,7 +578,8 @@ bool PN5180::transceiveCommand(uint8_t *sendBuffer, size_t sendBufferLen, uint8_
     unsigned long t = millis();
     while (LOW != digitalRead(PN5180_BUSY)) { // wait until busy is low
       if (millis() - t > 1000) {
-        PN5180DEBUG(F("TIMEOUT waiting for BUSY LOW (pre-send)\n"));
+        Serial.println("PN5180: TIMEOUT BUSY-LOW pre-send");
+        pn5180_busWedged = true;
         return false;
       }
     }
@@ -559,8 +595,9 @@ bool PN5180::transceiveCommand(uint8_t *sendBuffer, size_t sendBufferLen, uint8_
     unsigned long t = millis();
     while(HIGH != digitalRead(PN5180_BUSY)) {  // wait until BUSY is high
       if (millis() - t > 1000) {
-        PN5180DEBUG(F("TIMEOUT waiting for BUSY HIGH (post-send)\n"));
+        Serial.println("PN5180: TIMEOUT BUSY-HIGH post-send");
         digitalWrite(PN5180_NSS, HIGH);
+        pn5180_busWedged = true;
         return false;
       }
     }
@@ -572,7 +609,8 @@ bool PN5180::transceiveCommand(uint8_t *sendBuffer, size_t sendBufferLen, uint8_
     unsigned long t = millis();
     while (LOW != digitalRead(PN5180_BUSY)) { // wait until BUSY is low
       if (millis() - t > 1000) {
-        PN5180DEBUG(F("TIMEOUT waiting for BUSY LOW (post-send)\n"));
+        Serial.println("PN5180: TIMEOUT BUSY-LOW post-send");
+        pn5180_busWedged = true;
         return false;
       }
     }
@@ -594,7 +632,8 @@ bool PN5180::transceiveCommand(uint8_t *sendBuffer, size_t sendBufferLen, uint8_
     unsigned long t = millis();
     while(HIGH != digitalRead(PN5180_BUSY)) {  // wait until BUSY is high
       if (millis() - t > 1000) {
-        PN5180DEBUG(F("TIMEOUT waiting for BUSY HIGH (post-recv)\n"));
+        Serial.println("PN5180: TIMEOUT BUSY-HIGH post-recv");
+        pn5180_busWedged = true;
         digitalWrite(PN5180_NSS, HIGH);
         return false;
       }
@@ -607,7 +646,8 @@ bool PN5180::transceiveCommand(uint8_t *sendBuffer, size_t sendBufferLen, uint8_
     unsigned long t = millis();
     while(LOW != digitalRead(PN5180_BUSY)) {  // wait until BUSY is low
       if (millis() - t > 1000) {
-        PN5180DEBUG(F("TIMEOUT waiting for BUSY LOW (post-recv)\n"));
+        Serial.println("PN5180: TIMEOUT BUSY-LOW post-recv");
+        pn5180_busWedged = true;
         return false;
       }
     }
@@ -633,11 +673,12 @@ bool PN5180::reset() {
   delay(10);
   digitalWrite(PN5180_RST, HIGH); // 2ms to ramp up required
   delay(10);
+  clearBusWedged();  // fresh chip state — allow transactions again
 
   unsigned long t = millis();
   while (0 == (IDLE_IRQ_STAT & getIRQStatus())) { // wait for system to start up
     if (millis() - t > 1000) {
-      PN5180DEBUG(F("TIMEOUT waiting for IDLE_IRQ after reset\n"));
+      Serial.println("PN5180: TIMEOUT IDLE_IRQ after reset");
       return false;
     }
   }

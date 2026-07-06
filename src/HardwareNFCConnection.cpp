@@ -1,6 +1,18 @@
 #include "HardwareNFCConnection.h"
 #include <Arduino.h>
 #include <cstring>
+#include <esp_task_wdt.h>
+
+// NFCScanTask feeds the task watchdog once per scan-loop iteration, but a
+// single iteration can legally grind for minutes when RF operations fail
+// slowly (each BUSY/IRQ wait is bounded at 1-2s) across a multi-block read
+// or write ladder — marginal coupling wedges the transceiver and every block
+// burns seconds. Feed the watchdog per block so it catches true hangs, not
+// slow RF failure grinds (task_wdt reboot loop, bench 2026-07-06). Harmless
+// no-op (ESP_ERR_NOT_FOUND) when called from tasks not subscribed to the TWDT.
+static inline void feedTaskWatchdog() {
+    esp_task_wdt_reset();
+}
 
 // PN5180 ISO15693 NFC reader with ISO14443A fallback. Handles tag detection,
 // multi-block read/write caching (prevents watchdog timeout), and RF state management.
@@ -18,6 +30,7 @@ HardwareNFCConnection::~HardwareNFCConnection() {
 }
 
 opt_error_t HardwareNFCConnection::halReadPage(void* ctx, uint8_t page, uint8_t* buffer) {
+    feedTaskWatchdog();
     HardwareNFCConnection* self = static_cast<HardwareNFCConnection*>(ctx);
 
     // Batch read on first page request to avoid watchdog timeout: ICODE SLIX2 has a per-command
@@ -48,6 +61,7 @@ opt_error_t HardwareNFCConnection::halReadPage(void* ctx, uint8_t page, uint8_t*
 }
 
 opt_error_t HardwareNFCConnection::halWritePage(void* ctx, uint8_t page, const uint8_t* data) {
+    feedTaskWatchdog();
     HardwareNFCConnection* self = static_cast<HardwareNFCConnection*>(ctx);
     ISO15693ErrorCode err = self->nfc_->writeSingleBlock(self->currentUid_, page, const_cast<uint8_t*>(data), 4);
     if (err != ISO15693_EC_OK) {
@@ -163,6 +177,7 @@ bool HardwareNFCConnection::hardwareReset() {
     digitalWrite(PIN_PN5180_RST, LOW);
     delay(10);
     digitalWrite(PIN_PN5180_RST, HIGH);
+    PN5180::clearBusWedged();  // fresh chip — release the fail-fast latch
 
     // Wait for BUSY to go LOW with timeout
     unsigned long start = millis();
@@ -321,7 +336,10 @@ uint16_t HardwareNFCConnection::readISO14443Pages(uint8_t startPage, uint8_t pag
 
     // mifareBlockRead reads 16 bytes (4 pages) per call; read in 4-page chunks starting from startPage
     uint16_t bytesRead = 0;
+    extern volatile uint32_t g_nfcScanPhasePage;
     for (uint8_t page = startPage; page < startPage + pageCount; page += 4) {
+        feedTaskWatchdog();
+        g_nfcScanPhasePage = page;
         uint8_t block[16] = {0};
         if (!iso14443a_->mifareBlockRead(page, block)) {
             Serial.printf("HardwareNFC: readISO14443Pages - read failed at page %d\n", page);
@@ -373,6 +391,7 @@ bool HardwareNFCConnection::writeISO14443Pages(uint8_t startPage, uint8_t pageCo
     unsigned long writeStart = millis();
     int retryCount = 0;
     for (uint8_t i = 0; i < pageCount; i++) {
+        feedTaskWatchdog();
         uint8_t page = startPage + i;
         bool pageOk = iso14443a_->mifareBlockWrite4(page, data + (i * 4));
 
