@@ -110,40 +110,6 @@ static bool parseIdFromObject(const char* jsonText, int& outId) {
     return false;
 }
 
-static bool parseVendorIdByName(const char* jsonText, const char* targetName, int& outId) {
-    outId = -1;
-    const_buffer_stream stm((const uint8_t*)jsonText, strlen(jsonText));
-    json_reader reader(stm);
-
-    while (reader.read()) {
-        if (reader.node_type() != json_node_type::object) {
-            continue;
-        }
-        const unsigned objectDepth = reader.depth();
-        int candidateId = -1;
-        char candidateName[64] = {0};
-        while (reader.read()) {
-            if (reader.node_type() == json_node_type::end_object && reader.depth() == objectDepth) {
-                if (candidateName[0] != '\0' && strcasecmp(candidateName, targetName) == 0 && candidateId >= 0) {
-                    outId = candidateId;
-                    return true;
-                }
-                break;
-            }
-            if (reader.node_type() != json_node_type::field) continue;
-            const char* field = reader.value();
-            if (strcmp(field, "id") == 0) {
-                if (reader.read()) readIntValue(reader, candidateId);
-            } else if (strcmp(field, "name") == 0) {
-                if (reader.read()) {
-                    readStringValue(reader, candidateName, sizeof(candidateName));
-                }
-            }
-        }
-    }
-    return false;
-}
-
 static bool parseFirstArrayItemId(const char* jsonText, int& outId) {
     outId = -1;
     const_buffer_stream stm((const uint8_t*)jsonText, strlen(jsonText));
@@ -363,6 +329,108 @@ static int streamFindSpoolByNfcId(const char* path, const char* uuid) {
     return bestMatchId >= 0 ? bestMatchId : -1;
 }
 
+// Streaming vendor search by exact name (case-insensitive) over /api/v1/vendor.
+// The list is fetched unfiltered — Spoolman's ?name= filter does substring
+// matching, so the exact match happens client-side either way, and streaming
+// makes the list size irrelevant. On match, the vendor's canonical name is
+// copied to outName when provided. Returns id >= 0 match, -1 not found,
+// -2 transport/parse failure — callers must NOT create on -2.
+static int streamFindVendorByName(const char* targetName, char* outName = nullptr,
+                                  size_t outNameSize = 0) {
+    const char* baseUrl = ConfigurationManager::getInstance().getSpoolmanURL();
+    char url[256];
+    snprintf(url, sizeof(url), "%s/api/v1/vendor", baseUrl);
+
+    WiFiClient streamClient;
+    HTTPClient streamHttp;
+    streamHttp.useHTTP10(true);
+    streamHttp.begin(streamClient, url);
+    streamHttp.setTimeout(10000);
+    int code = streamHttp.GET();
+    if (code != 200) {
+        Serial.printf("SpoolmanManager: vendor list HTTP %d\n", code);
+        streamHttp.end();
+        return -2;
+    }
+
+    HttpClientStream stm(*streamHttp.getStreamPtr());
+    json_reader reader(stm);
+
+    int foundId = -1;
+    bool sawAnyNode = false;
+    bool parseError = false;
+    bool docComplete = false;  // saw the outer array close — reader stops silently on malformed JSON
+    bool inElement = false;
+    int nestLevel = 0;
+    int curId = -1;
+    char curName[64];
+    curName[0] = '\0';
+
+    while (reader.read()) {
+        sawAnyNode = true;
+        json_node_type nt = reader.node_type();
+        if (nt == json_node_type::error) { parseError = true; break; }
+
+        if (!inElement) {
+            if (nt == json_node_type::object) {
+                inElement = true;
+                nestLevel = 0;
+                curId = -1;
+                curName[0] = '\0';
+            } else if (nt == json_node_type::end_array) {
+                docComplete = true;
+            }
+            continue;
+        }
+
+        if (nt == json_node_type::object || nt == json_node_type::array) {
+            nestLevel++;
+            continue;
+        }
+        if (nt == json_node_type::end_object || nt == json_node_type::end_array) {
+            if (nestLevel > 0) { nestLevel--; continue; }
+            if (curId >= 0 && curName[0] != '\0' &&
+                strcasecmp(curName, targetName) == 0) {
+                foundId = curId;
+                if (outName != nullptr && outNameSize > 0) {
+                    strncpy(outName, curName, outNameSize - 1);
+                    outName[outNameSize - 1] = '\0';
+                }
+                break;
+            }
+            inElement = false;
+            continue;
+        }
+
+        if (nt == json_node_type::field && nestLevel == 0) {
+            char fieldName[16];
+            const char* fv = reader.value();
+            strncpy(fieldName, fv ? fv : "", sizeof(fieldName) - 1);
+            fieldName[sizeof(fieldName) - 1] = '\0';
+            if (!reader.read()) break;
+            json_node_type vt = reader.node_type();
+            if (vt == json_node_type::error) { parseError = true; break; }
+            if (vt == json_node_type::object || vt == json_node_type::array) {
+                nestLevel++;
+                continue;
+            }
+            if (strcmp(fieldName, "id") == 0) {
+                readIntValue(reader, curId);
+            } else if (strcmp(fieldName, "name") == 0) {
+                readStringValue(reader, curName, sizeof(curName));
+            }
+        }
+    }
+    bool truncated = (reader.error() != json_error::none);
+    streamHttp.end();
+
+    if (parseError || !sawAnyNode || (foundId < 0 && (truncated || !docComplete))) {
+        Serial.println("SpoolmanManager: vendor lookup parse/transport failure");
+        return -2;
+    }
+    return foundId;
+}
+
 // --- File-local Spoolman API helpers ---
 
 static const char* materialTypeToSpoolmanStr(uint8_t type) {
@@ -519,25 +587,19 @@ static int findOrCreateVendor(const char* name) {
         name = "Unknown";
     }
 
-    // Fetch all vendors and match client-side (Spoolman ?name= filter is unreliable)
-    String response;
-    int code = httpGet("/api/v1/vendor", response);
-
-    Serial.printf("SpoolmanManager: get vendors code=%d\n", code);
-
-    if (code != 200) {
+    int id = streamFindVendorByName(name);
+    if (id == -2) {
         // Lookup failed — don't create blindly, could be transient error
-        Serial.printf("SpoolmanManager: Vendor lookup failed (code=%d), cannot resolve '%s'\n", code, name);
-        return -1;
+        Serial.printf("SpoolmanManager: Vendor lookup failed, cannot resolve '%s'\n", name);
+        return -2;
     }
-
-    int id = -1;
-    if (parseVendorIdByName(response.c_str(), name, id)) {
+    if (id >= 0) {
         Serial.printf("SpoolmanManager: Found vendor '%s' id=%d\n", name, id);
         return id;
     }
 
     // Definitive miss — create new vendor
+    int code;
     StaticJsonDocument<JSON_SMALL_CAPACITY> createDoc;
     createDoc["name"] = name;
     String body;
@@ -1584,6 +1646,10 @@ void SpoolmanManager::setPendingLink(int32_t spoolId) {
 int SpoolmanManager::findFilamentNoLock(int vendorId, const char* material,
                                         const char* colorHex6, const char* name) {
     return streamFindFilament(vendorId, material, colorHex6, name ? name : "");
+}
+
+int SpoolmanManager::findVendorNoLock(const char* name, char* outName, size_t outNameSize) {
+    return streamFindVendorByName(name, outName, outNameSize);
 }
 
 int SpoolmanManager::findSpoolIdByUidNoLock(const char* uid) {

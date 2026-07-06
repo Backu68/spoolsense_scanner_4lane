@@ -64,6 +64,12 @@ public:
     // failed (transport/parse) — callers must not create on -2.
     int findSpoolIdByUidNoLock(const char* uid);
 
+    // Streaming vendor search by exact name (case-insensitive); canonical name
+    // copied to outName on match. Does NOT take the HTTP mutex — caller must
+    // hold g_httpMutex. Returns id >= 0, -1 not found, -2 lookup failed —
+    // callers must not create on -2.
+    int findVendorNoLock(const char* name, char* outName = nullptr, size_t outNameSize = 0);
+
     // Streaming filament search (per-vendor when vendorId > 0, unfiltered
     // otherwise); tiered match: exact material+color+name, else material+color.
     // Does NOT take the HTTP mutex — caller must hold g_httpMutex. Returns

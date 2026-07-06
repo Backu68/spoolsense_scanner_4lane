@@ -355,25 +355,13 @@ void WebServerManager::handleApiRegisterUid() {
     int code;
 
     // --- Step 1: Find or create vendor ---
-    int vendorId = -1;
-    String encodedMfg = urlEncode(manufacturer);
-    snprintf(url, sizeof(url), "%s/api/v1/vendor?name=%s", baseUrl, encodedMfg.c_str());
-    http.begin(client, url);
-    code = http.GET();
-    if (code == 200) {
-        response = http.getString();
-        StaticJsonDocument<2048> vendorDoc;
-        if (!deserializeJson(vendorDoc, response)) {
-            JsonArray arr = vendorDoc.as<JsonArray>();
-            for (JsonObject v : arr) {
-                if (strcasecmp(v["name"] | "", manufacturer) == 0) {
-                    vendorId = v["id"] | -1;
-                    break;
-                }
-            }
-        }
+    int vendorId = SpoolmanManager::getInstance().findVendorNoLock(manufacturer);
+    if (vendorId == -2) {
+        // Lookup failed — creating now could mint a duplicate vendor
+        xSemaphoreGive(g_httpMutex);
+        sendError(503, "Spoolman vendor lookup failed — try again");
+        return;
     }
-    http.end();
 
     if (vendorId < 0) {
         // Create vendor
@@ -1799,50 +1787,26 @@ void WebServerManager::handleApiSpoolmanFindVendor() {
         return;
     }
 
-    WiFiClient client;
-    HTTPClient http;
-    String encoded = urlEncode(name.c_str());
-    char url[256];
-    snprintf(url, sizeof(url), "%s/api/v1/vendor?name=%s", baseUrl, encoded.c_str());
-
-    http.begin(client, url);
-    http.setTimeout(5000);
-    int code = http.GET();
-    if (code != 200) {
-        http.end();
-        xSemaphoreGive(g_httpMutex);
-        _server.send(200, "application/json", "{\"found\":false}");
-        return;
-    }
-
-    String resp = http.getString();
-    http.end();
-
-    // Search array for case-insensitive name match
-    DynamicJsonDocument doc(2048);
-    if (deserializeJson(doc, resp)) {
-        xSemaphoreGive(g_httpMutex);
-        _server.send(200, "application/json", "{\"found\":false}");
-        return;
-    }
-
-    JsonArray arr = doc.as<JsonArray>();
-    for (JsonObject v : arr) {
-        const char* vname = v["name"] | "";
-        if (strcasecmp(vname, name.c_str()) == 0) {
-            StaticJsonDocument<128> result;
-            result["found"] = true;
-            result["id"] = v["id"] | -1;
-            result["name"] = vname;
-            String out;
-            serializeJson(result, out);
-            xSemaphoreGive(g_httpMutex);
-            _server.send(200, "application/json", out);
-            return;
-        }
-    }
-
+    char matchedName[64];
+    int vendorId = SpoolmanManager::getInstance().findVendorNoLock(name.c_str(), matchedName, sizeof(matchedName));
     xSemaphoreGive(g_httpMutex);
+
+    if (vendorId == -2) {
+        // Transient lookup failure — a false "not found" would steer the page
+        // toward creating a duplicate vendor
+        _server.send(503, "application/json", "{\"error\":\"Spoolman lookup failed\"}");
+        return;
+    }
+    if (vendorId >= 0) {
+        StaticJsonDocument<128> result;
+        result["found"] = true;
+        result["id"] = vendorId;
+        result["name"] = matchedName;
+        String out;
+        serializeJson(result, out);
+        _server.send(200, "application/json", out);
+        return;
+    }
     _server.send(200, "application/json", "{\"found\":false}");
 }
 
@@ -1869,61 +1833,52 @@ void WebServerManager::handleApiSpoolmanFindFilament() {
         return;
     }
 
+    // Stream-match the filament list (constant memory), then fetch just the
+    // matched filament (~700B) for the response payload. Empty color = wildcard.
+    const char* colorCmp = colorHex.c_str();
+    if (colorCmp[0] == '#') colorCmp++;
+    int filamentId = SpoolmanManager::getInstance().findFilamentNoLock(
+        atoi(vendorId.c_str()), material.c_str(), colorCmp, "");
+
+    if (filamentId == -2) {
+        xSemaphoreGive(g_httpMutex);
+        // Transient failure — a false "not found" would steer the page toward
+        // creating a duplicate filament
+        _server.send(503, "application/json", "{\"error\":\"Spoolman lookup failed\"}");
+        return;
+    }
+    if (filamentId < 0) {
+        xSemaphoreGive(g_httpMutex);
+        _server.send(200, "application/json", "{\"found\":false}");
+        return;
+    }
+
     WiFiClient client;
     HTTPClient http;
     char url[256];
-    // Spoolman's ?material= filter is unreliable (#92) — match client-side
-    snprintf(url, sizeof(url), "%s/api/v1/filament?vendor_id=%s",
-             baseUrl, vendorId.c_str());
-
+    snprintf(url, sizeof(url), "%s/api/v1/filament/%d", baseUrl, filamentId);
     http.begin(client, url);
     http.setTimeout(5000);
     int code = http.GET();
-    if (code != 200) {
-        http.end();
-        xSemaphoreGive(g_httpMutex);
-        _server.send(200, "application/json", "{\"found\":false}");
-        return;
-    }
-
-    String resp = http.getString();
+    String resp = (code == 200) ? http.getString() : String();
     http.end();
+    xSemaphoreGive(g_httpMutex);
 
-    // Use DynamicJsonDocument for potentially large filament list
-    DynamicJsonDocument doc(4096);
-    if (deserializeJson(doc, resp)) {
-        xSemaphoreGive(g_httpMutex);
-        _server.send(200, "application/json", "{\"found\":false}");
+    DynamicJsonDocument doc(2048);
+    if (code != 200 || deserializeJson(doc, resp)) {
+        _server.send(503, "application/json", "{\"error\":\"Spoolman lookup failed\"}");
         return;
     }
 
-    // Return the first filament that matches vendor + material (optionally color)
-    JsonArray arr = doc.as<JsonArray>();
-    for (JsonObject f : arr) {
-        const char* fmat = f["material"] | "";
-        if (strcasecmp(fmat, material.c_str()) == 0) {
-            if (!colorHex.isEmpty()) {
-                const char* fc = f["color_hex"] | "";
-                const char* cmp = colorHex.c_str();
-                if (cmp[0] == '#') cmp++;
-                if (strcasecmp(fc[0] == '#' ? fc + 1 : fc, cmp) != 0) continue;
-            }
-            StaticJsonDocument<256> result;
-            result["found"] = true;
-            result["id"] = f["id"] | -1;
-            result["name"] = f["name"] | "";
-            result["material"] = fmat;
-            result["color_hex"] = f["color_hex"] | "";
-            String out;
-            serializeJson(result, out);
-            xSemaphoreGive(g_httpMutex);
-            _server.send(200, "application/json", out);
-            return;
-        }
-    }
-
-    xSemaphoreGive(g_httpMutex);
-    _server.send(200, "application/json", "{\"found\":false}");
+    StaticJsonDocument<256> result;
+    result["found"] = true;
+    result["id"] = filamentId;
+    result["name"] = doc["name"] | "";
+    result["material"] = doc["material"] | "";
+    result["color_hex"] = doc["color_hex"] | "";
+    String out;
+    serializeJson(result, out);
+    _server.send(200, "application/json", out);
 }
 
 // ── Enrichment save helpers ─────────────────────────────────
@@ -1941,25 +1896,8 @@ int WebServerManager::enrichFindOrCreateVendor(WiFiClient& client, HTTPClient& h
     char url[256];
     int vendorId = -1;
     if (!declinedMatch) {
-        String encodedMfg = urlEncode(manufacturer);
-        snprintf(url, sizeof(url), "%s/api/v1/vendor?name=%s", baseUrl, encodedMfg.c_str());
-        http.begin(client, url);
-        http.setTimeout(5000);
-        int code = http.GET();
-        if (code == 200) {
-            String response = http.getString();
-            DynamicJsonDocument vDoc(2048);
-            if (!deserializeJson(vDoc, response)) {
-                for (JsonObject v : vDoc.as<JsonArray>()) {
-                    if (strcasecmp(v["name"] | "", manufacturer) == 0) {
-                        vendorId = v["id"] | -1;
-                        break;
-                    }
-                }
-            }
-        }
-        http.end();
-
+        vendorId = SpoolmanManager::getInstance().findVendorNoLock(manufacturer);
+        if (vendorId == -2) return -2;  // lookup failed — caller must not create
         if (vendorId >= 0) return vendorId;
     }
 
@@ -2234,6 +2172,11 @@ void WebServerManager::handleApiSpoolmanSaveEnrichment() {
     HTTPClient http;
 
     int vendorId = enrichFindOrCreateVendor(client, http, baseUrl, manufacturer, confirmedVendorId);
+    if (vendorId == -2) {
+        xSemaphoreGive(g_httpMutex);
+        _server.send(503, "application/json", "{\"error\":\"Spoolman lookup failed — try again\"}");
+        return;
+    }
     int filamentId = enrichFindOrCreateFilament(client, http, baseUrl, material, colorHex,
                                                  vendorId, density, diameter, bedTemp, nozzleTemp, confirmedFilamentId);
     if (filamentId < 0) {
