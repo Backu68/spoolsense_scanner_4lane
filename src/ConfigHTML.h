@@ -176,6 +176,13 @@ const char CONFIG_HTML[] PROGMEM = R"rawliteral(
                 </select>
                 <div style="font-size:11px;color:#71717A;margin-top:4px">Stage mode lets one scanner serve all four toolheads: scan a spool, then pick T0&ndash;T3 on the reader page (or a keypad if fitted). The staged spool expires after 30 seconds if unassigned.</div>
               </div>
+              <div class="toggle-row" id="u1_autopick_row" style="margin-bottom:14px;display:none">
+                <span id="u1_auto_pick_label" class="toggle-label">Auto-assign when a lane loads</span>
+                <label class="toggle-switch">
+                  <input type="checkbox" id="u1_auto_pick" aria-labelledby="u1_auto_pick_label" checked />
+                  <span class="toggle-track"></span>
+                </label>
+              </div>
               <div class="field" id="u1_channel_field">
                 <label for="u1_channel">Toolhead Channel</label>
                 <select id="u1_channel" style="padding:6px 10px;border-radius:6px;border:1px solid var(--border);background:var(--card);color:var(--text);font-size:0.95em">
@@ -339,8 +346,10 @@ const char CONFIG_HTML[] PROGMEM = R"rawliteral(
       document.getElementById('u1_enabled').checked = !!cfg.u1_enabled;
       if (cfg.u1_channel !== undefined) document.getElementById('u1_channel').value = cfg.u1_channel;
       if (cfg.u1_mode !== undefined) document.getElementById('u1_mode').value = cfg.u1_mode;
+      if (cfg.u1_auto_pick !== undefined) document.getElementById('u1_auto_pick').checked = !!cfg.u1_auto_pick;
       document.getElementById('u1_fields').style.display = cfg.u1_enabled ? '' : 'none';
       document.getElementById('u1_channel_field').style.display = (cfg.u1_mode == 1) ? 'none' : '';
+      document.getElementById('u1_autopick_row').style.display = (cfg.u1_mode == 1) ? '' : 'none';
       // Password placeholders
       if (cfg.wifi_pass_set) document.getElementById('wifi_pass').placeholder = '(set) Leave blank to keep';
       if (cfg.mqtt_pass_set) document.getElementById('mqtt_pass').placeholder = '(set) Leave blank to keep';
@@ -372,6 +381,7 @@ const char CONFIG_HTML[] PROGMEM = R"rawliteral(
     // beyond the default ("spoolsense" or empty). Saves the "what should I name this scanner?" decision.
     document.getElementById('u1_mode').addEventListener('change', function() {
       document.getElementById('u1_channel_field').style.display = (this.value == 1) ? 'none' : '';
+      document.getElementById('u1_autopick_row').style.display = (this.value == 1) ? '' : 'none';
     });
     document.getElementById('u1_channel').addEventListener('change', function() {
       var hostInput = document.getElementById('hostname');
@@ -422,7 +432,8 @@ const char CONFIG_HTML[] PROGMEM = R"rawliteral(
         wifi_keep_awake: document.getElementById('wifi_keep_awake').checked ? 1 : 0,
         u1_enabled: document.getElementById('u1_enabled').checked ? 1 : 0,
         u1_channel: parseInt(document.getElementById('u1_channel').value) || 0,
-        u1_mode: parseInt(document.getElementById('u1_mode').value) || 0
+        u1_mode: parseInt(document.getElementById('u1_mode').value) || 0,
+        u1_auto_pick: document.getElementById('u1_auto_pick').checked ? 1 : 0
       };
 
       fetch('/api/config', {

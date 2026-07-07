@@ -8,6 +8,7 @@
   #include "ApplicationManager.h"  // SpoolDetectedPayload, SpoolmanSyncedPayload
   #include "NFCTypes.h"             // CurrentSpoolState, TagKind
   #include "ConfigurationManager.h"
+#include "LogBuffer.h"
   #include <Arduino.h>
   #include <WiFi.h>
   #include <HTTPClient.h>
@@ -307,6 +308,7 @@ U1Manager& U1Manager::getInstance() {
 }
 
 void U1Manager::stageSpool(const U1FilamentInfo& info, const char* uid) {
+    autoPick_ = {};  // fresh baseline for the motion-sensor poller
     taskENTER_CRITICAL(&stagedMux_);
     staged_.active = true;
     staged_.expiresAtMs = millis() + STAGE_TTL_MS;
@@ -385,6 +387,98 @@ bool U1Manager::assignStagedToChannel(uint8_t channel) {
     lastAssign_.atMs = millis();
     memcpy(lastAssign_.uid, uid, sizeof(lastAssign_.uid));
     return true;
+}
+
+bool U1Manager::queryLaneSensors(bool loaded[4]) {
+    auto& cfg = ConfigurationManager::getInstance();
+    const char* moonrakerUrl = cfg.getMoonrakerURL();
+    if (!moonrakerUrl || moonrakerUrl[0] == '\0') return false;
+
+    if (g_httpMutex && xSemaphoreTake(g_httpMutex, pdMS_TO_TICKS(100)) != pdTRUE) {
+        return false;  // busy — try again next tick
+    }
+
+    // filament_motion_sensor e0_filament .. e3_filament (extended firmware
+    // naming — needs one field confirmation against a live U1)
+    char url[320];
+    snprintf(url, sizeof(url),
+             "%s/printer/objects/query?filament_motion_sensor%%20e0_filament"
+             "&filament_motion_sensor%%20e1_filament"
+             "&filament_motion_sensor%%20e2_filament"
+             "&filament_motion_sensor%%20e3_filament",
+             moonrakerUrl);
+
+    WiFiClient client;
+    HTTPClient http;
+    http.setConnectTimeout(800);
+    http.setTimeout(1500);
+    http.begin(client, url);
+    int code = http.GET();
+    String resp = (code == 200) ? http.getString() : String();
+    http.end();
+    if (g_httpMutex) xSemaphoreGive(g_httpMutex);
+
+    if (code != 200) {
+        if (code < 0) moonrakerBackoffUntilMs_ = millis() + MOONRAKER_BACKOFF_MS;
+        return false;
+    }
+
+    DynamicJsonDocument doc(2048);
+    if (deserializeJson(doc, resp) != DeserializationError::Ok) return false;
+    JsonObject status = doc["result"]["status"];
+    if (status.isNull()) return false;
+
+    const char* names[4] = {
+        "filament_motion_sensor e0_filament", "filament_motion_sensor e1_filament",
+        "filament_motion_sensor e2_filament", "filament_motion_sensor e3_filament"
+    };
+    for (int i = 0; i < 4; i++) {
+        loaded[i] = status[names[i]]["filament_detected"] | false;
+    }
+    return true;
+}
+
+void U1Manager::loopTick() {
+    auto& cfg = ConfigurationManager::getInstance();
+    if (!cfg.isU1Enabled() || !cfg.isU1StageMode() || !cfg.isU1AutoPickEnabled()) return;
+    if (!hasStagedSpool()) return;
+
+    uint32_t now = millis();
+    if (now - autoPick_.lastPollMs < AUTO_PICK_POLL_MS) return;
+    autoPick_.lastPollMs = now;
+    if (moonrakerBackoffUntilMs_ != 0 && (int32_t)(now - moonrakerBackoffUntilMs_) < 0) return;
+
+    bool loaded[4] = {};
+    if (!queryLaneSensors(loaded)) return;
+
+    if (!autoPick_.baselineValid) {
+        // Snapshot which lanes were already loaded at stage time — only an
+        // empty→loaded transition after this point may claim the spool
+        memcpy(autoPick_.baseline, loaded, sizeof(autoPick_.baseline));
+        autoPick_.baselineValid = true;
+        return;
+    }
+
+    for (int i = 0; i < 4; i++) {
+        if (autoPick_.baseline[i]) continue;   // was loaded before the scan
+        if (loaded[i]) {
+            if (++autoPick_.detectCount[i] >= AUTO_PICK_DEBOUNCE) {
+                Serial.printf("U1Manager: auto-pick — lane %d loaded, assigning staged spool\n", i);
+                LogBuffer::getInstance().logPrintf("U1: auto-assigned tool %d\n", i);
+                assignStagedToChannel((uint8_t)i);
+                return;
+            }
+        } else {
+            autoPick_.detectCount[i] = 0;      // flutter — restart debounce
+        }
+    }
+}
+
+int8_t U1Manager::getRecentAssignChannel() {
+    if (lastAssign_.channel >= 0 && (millis() - lastAssign_.atMs) < 10000) {
+        return lastAssign_.channel;
+    }
+    return -1;
 }
 
 void U1Manager::publishFromDetection(const SpoolDetectedPayload& payload) {
@@ -565,5 +659,8 @@ bool U1Manager::assignStagedToChannel(uint8_t) { return false; }
 bool U1Manager::hasStagedSpool() { return false; }
 void U1Manager::stageSpool(const U1FilamentInfo&, const char*) {}
 void U1Manager::clearStaged() {}
+void U1Manager::loopTick() {}
+int8_t U1Manager::getRecentAssignChannel() { return -1; }
+bool U1Manager::queryLaneSensors(bool[4]) { return false; }
 
 #endif

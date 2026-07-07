@@ -781,6 +781,7 @@ void WebServerManager::handleApiGetConfig() {
     doc["u1_enabled"] = cfg.u1_enabled;
     doc["u1_channel"] = cfg.u1_channel;
     doc["u1_mode"] = cfg.u1_mode;
+    doc["u1_auto_pick"] = cfg.u1_auto_pick;
     // led_pin: emit "" for the default sentinel so the web field shows empty
     if (cfg.led_pin == LED_PIN_DEFAULT) {
         doc["led_pin"] = "";
@@ -851,6 +852,7 @@ void WebServerManager::handleApiPostConfig() {
         update.u1_channel = (ch <= 3) ? ch : 0;  // clamp invalid client input
         uint8_t mode = doc["u1_mode"] | (uint8_t)0;
         update.u1_mode = (mode <= 1) ? mode : 0;
+        update.u1_auto_pick = doc["u1_auto_pick"] | (uint8_t)1;
     }
     {
         // Sent as a string so empty (= board default) is distinguishable from GPIO 0.
@@ -1345,6 +1347,9 @@ void WebServerManager::handleApiStatus() {
             staged["vendor"] = st.vendor;
             staged["material"] = st.material;
             if (st.rgb >= 0) staged["rgb"] = st.rgb;
+        } else {
+            int8_t recent = U1Manager::getInstance().getRecentAssignChannel();
+            if (recent >= 0) doc["u1_assigned"] = recent;
         }
     }
 

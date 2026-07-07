@@ -460,7 +460,14 @@ const char READER_HTML[] PROGMEM = R"rawliteral(
         // poll running so the countdown and expiry stay honest
         if (!pollTimer && !u1AssignBusy) { pollTimer = setInterval(poll, 1000); }
       } else if (!u1AssignBusy) {
-        panel.classList.add('hidden');
+        if (s && s.u1_assigned !== undefined && !panel.classList.contains('hidden')) {
+          // Staged spool vanished because the motion-sensor auto-pick (or the
+          // keypad) assigned it — tell the user which tool won
+          info.innerHTML = '\u2713 Spool assigned to T' + s.u1_assigned + '.';
+          setTimeout(function(){ panel.classList.add('hidden'); }, 3000);
+        } else {
+          panel.classList.add('hidden');
+        }
         // Nothing staged and tag already found — stop the light poll again
         if (tagFound && pollTimer) { stopPolling(); }
       }

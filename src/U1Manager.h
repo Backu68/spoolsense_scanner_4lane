@@ -74,6 +74,18 @@ public:
     // digits to channel selection. Dispatch-loop only.
     bool hasStagedSpool();
 
+    // Phase 3 — motion-sensor auto-pick. Called every main-loop pass; cheap
+    // no-op unless a spool is staged with auto-pick enabled. Polls the U1's
+    // per-lane filament sensors ~1/s and assigns the staged spool to the
+    // first lane that transitions empty → loaded after staging (edge, not
+    // level: lanes already loaded at stage time never win; two consecutive
+    // detections required to debounce loading flutter).
+    void loopTick();
+
+    // Channel auto/manually assigned in the last few seconds (-1 = none) —
+    // lets the reader page confirm an auto-pick the user never clicked.
+    int8_t getRecentAssignChannel();
+
     // Smart tag scan path. Builds U1 info from on-tag data + per-material
     // defaults, POSTs to /printer/filament_detect/set, and (if anything is
     // still missing and Spoolman is configured) registers a pending augment
@@ -134,6 +146,20 @@ private:
         char uid[17] = {};
     };
     LastAssign lastAssign_ = {};
+
+    // Auto-pick poller state — reset on every stageSpool()
+    struct AutoPick {
+        bool baselineValid = false;
+        bool baseline[4] = {};      // lanes already loaded at stage time
+        uint8_t detectCount[4] = {}; // consecutive loaded polls per lane (debounce)
+        uint32_t lastPollMs = 0;
+    };
+    AutoPick autoPick_ = {};
+    static constexpr uint32_t AUTO_PICK_POLL_MS = 1000;
+    static constexpr uint8_t AUTO_PICK_DEBOUNCE = 2;
+
+    // One Moonraker sensor query; fills loaded[4], returns false on any failure
+    bool queryLaneSensors(bool loaded[4]);
 
     void stageSpool(const U1FilamentInfo& info, const char* uid);
     void clearStaged();
