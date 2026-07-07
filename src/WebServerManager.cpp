@@ -595,14 +595,21 @@ void WebServerManager::handleApiSpoolmanLink() {
 
 void WebServerManager::handleApiSpoolmanPendingLink() {
     if (_server.method() == HTTP_GET) {
-        // Link-only flow polls this to show "linked" vs "expired": armed goes
-        // false the moment a sync consumes the link or the window lapses
-        int32_t spoolId = -1;
-        uint32_t remainingMs = 0;
-        bool armed = SpoolmanManager::getInstance().getPendingLinkState(spoolId, remainingMs);
-        char body[96];
-        snprintf(body, sizeof(body), "{\"armed\":%s,\"spool_id\":%ld,\"remaining_ms\":%lu}",
-                 armed ? "true" : "false", (long)spoolId, (unsigned long)remainingMs);
+        // Link-only flow polls this. States: armed (countdown), consumed
+        // (with the real PATCH outcome + the tag that took it), expired, idle.
+        auto st = SpoolmanManager::getInstance().getPendingLinkStatus();
+        const char* stateStr = "idle";
+        switch (st.state) {
+            case SpoolmanManager::PendingLinkState::Armed:    stateStr = "armed"; break;
+            case SpoolmanManager::PendingLinkState::Consumed: stateStr = "consumed"; break;
+            case SpoolmanManager::PendingLinkState::Expired:  stateStr = "expired"; break;
+            default: break;
+        }
+        char body[160];
+        snprintf(body, sizeof(body),
+                 "{\"state\":\"%s\",\"spool_id\":%ld,\"remaining_ms\":%lu,\"link_ok\":%s,\"uid\":\"%s\"}",
+                 stateStr, (long)st.spoolId, (unsigned long)st.remainingMs,
+                 st.linkOk ? "true" : "false", st.uid);
         _server.send(200, "application/json", body);
         return;
     }

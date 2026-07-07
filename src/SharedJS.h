@@ -445,6 +445,8 @@ function selectSpoolmanSpool(spoolId) {
 // without touching the tag. Arms the firmware pending link and reports the
 // outcome by polling: armed=false with time left means a sync consumed it.
 function renderLinkOnlyBar(spoolId) {
+  spoolId = Number(spoolId);
+  if (!isFinite(spoolId) || spoolId <= 0) return;
   var results = document.getElementById('spoolmanPickerResults');
   if (!results) return;
   var bar = document.getElementById('linkOnlyBar');
@@ -462,6 +464,8 @@ function renderLinkOnlyBar(spoolId) {
 }
 
 async function linkTagOnly(spoolId) {
+  spoolId = Number(spoolId);
+  if (!isFinite(spoolId) || spoolId <= 0) return;
   var status = document.getElementById('linkOnlyStatus');
   try {
     await api('/api/spoolman/pending-link', {
@@ -474,12 +478,18 @@ async function linkTagOnly(spoolId) {
     return;
   }
   _selectedSpoolId = -1;  // consumed by this flow — do not re-arm on Write Tag
-  var deadline = Date.now() + 125000;
+  var deadline = Date.now() + 135000;
   while (Date.now() < deadline) {
     var st = null;
     try { st = await api('/api/spoolman/pending-link'); } catch (e) {}
-    if (st && st.armed === false) {
-      if (status) status.textContent = '\u2713 Tag linked to spool #' + spoolId + '.';
+    if (st && st.state === 'consumed' && st.spool_id === spoolId) {
+      if (status) status.textContent = st.link_ok
+        ? ('\u2713 Tag ' + (st.uid || '') + ' linked to spool #' + spoolId + '.')
+        : ('\u2717 Link failed \u2014 Spoolman rejected the update. Try again.');
+      return;
+    }
+    if (st && (st.state === 'expired' || st.state === 'idle')) {
+      if (status) status.textContent = 'Link window expired \u2014 select the spool and try again.';
       return;
     }
     var secs = st && st.remaining_ms ? Math.ceil(st.remaining_ms / 1000) : Math.ceil((deadline - Date.now()) / 1000);

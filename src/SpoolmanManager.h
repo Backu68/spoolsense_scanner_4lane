@@ -58,10 +58,19 @@ public:
     // Set before write flow starts; consumed on first tag sync within PENDING_LINK_TIMEOUT_MS.
     void setPendingLink(int32_t spoolId);
 
-    // Pending-link state for the web UI's link-only flow: returns true while a
-    // link is armed and unexpired, filling the target spool and remaining ms.
-    // Returns false once consumed by a sync or timed out.
-    bool getPendingLinkState(int32_t& outSpoolId, uint32_t& outRemainingMs) const;
+    // Pending-link state machine for the web UI's link-only flow. Distinguishes
+    // a link consumed by a sync (with the actual PATCH outcome and the tag that
+    // took it) from one that expired unconsumed — the UI must never claim
+    // "linked" on an expiry or a failed PATCH.
+    enum class PendingLinkState : uint8_t { Idle, Armed, Consumed, Expired };
+    struct PendingLinkStatus {
+        PendingLinkState state = PendingLinkState::Idle;
+        int32_t spoolId = -1;       // armed target, or consumed link's spool
+        uint32_t remainingMs = 0;   // Armed only
+        bool linkOk = false;        // Consumed only: did the nfc_id PATCH succeed
+        char uid[17] = {0};         // Consumed only: tag that took the link
+    };
+    PendingLinkStatus getPendingLinkStatus();
 
     // Streaming nfc_id → spool id lookup (no spool-count cap, archived spools
     // excluded). Does NOT take the HTTP mutex — the caller must already hold the
@@ -133,6 +142,17 @@ private:
 
     std::atomic<int32_t> pendingLinkSpoolId_{-1};
     std::atomic<uint32_t> pendingLinkSetAt_{0};
+
+    // Outcome of the most recent consumed link — written by the sync task,
+    // read by the web task; guarded by cacheMutex_ (multi-field consistency)
+    struct LinkResult {
+        int32_t spoolId = -1;
+        bool ok = false;
+        uint32_t atMs = 0;
+        char uid[17] = {0};
+    };
+    LinkResult lastLinkResult_;
+    void recordLinkResult(int32_t spoolId, bool ok, const char* uid);
 };
 
 #endif // SPOOLMAN_MANAGER_H
