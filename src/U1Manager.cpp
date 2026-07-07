@@ -357,10 +357,12 @@ bool U1Manager::assignStagedToChannel(uint8_t channel) {
     // Copy out under the lock; POST outside it (HTTP under a critical section
     // would be catastrophic)
     U1FilamentInfo info;
+    char uid[17] = {};
     bool valid = false;
     taskENTER_CRITICAL(&stagedMux_);
     if (staged_.active && (int32_t)(millis() - staged_.expiresAtMs) < 0) {
         info = staged_.info;
+        memcpy(uid, staged_.uid, sizeof(uid));
         valid = true;
     }
     taskEXIT_CRITICAL(&stagedMux_);
@@ -379,6 +381,9 @@ bool U1Manager::assignStagedToChannel(uint8_t channel) {
     if (code < 0) return false;
     moonrakerBackoffUntilMs_ = 0;
     clearStaged();
+    lastAssign_.channel = (int8_t)channel;
+    lastAssign_.atMs = millis();
+    memcpy(lastAssign_.uid, uid, sizeof(lastAssign_.uid));
     return true;
 }
 
@@ -522,6 +527,16 @@ void U1Manager::publishFromSpoolmanSync(const SpoolmanSyncedPayload& sync,
         taskEXIT_CRITICAL(&stagedMux_);
         if (stillStaged) {
             Serial.printf("U1Manager: staged spool augmented from Spoolman (spool %d)\n", sync.spoolman_id);
+            return;
+        }
+        // Already assigned before the sync landed — re-post the augmented
+        // data to the channel the user picked, mirroring fixed mode
+        if (lastAssign_.channel >= 0 &&
+            strncmp(lastAssign_.uid, sync.spool_id, sizeof(lastAssign_.uid) - 1) == 0 &&
+            (millis() - lastAssign_.atMs) < PENDING_AUGMENT_TTL_MS) {
+            int code2 = postFilamentDetectSet((uint8_t)lastAssign_.channel, merged);
+            Serial.printf("U1Manager: augment after assign — channel=%d HTTP %d\n",
+                          lastAssign_.channel, code2);
         }
         return;
     }

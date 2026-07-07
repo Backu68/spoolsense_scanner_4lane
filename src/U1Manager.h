@@ -125,6 +125,16 @@ private:
     portMUX_TYPE stagedMux_ = portMUX_INITIALIZER_UNLOCKED;
     static constexpr uint32_t STAGE_TTL_MS = 30000;
 
+    // Last completed stage assignment — lets a Spoolman augment that arrives
+    // AFTER the user picked a channel still reach the printer (fixed mode
+    // re-posts augments; stage mode must not lose that on a fast pick).
+    struct LastAssign {
+        int8_t channel = -1;
+        uint32_t atMs = 0;
+        char uid[17] = {};
+    };
+    LastAssign lastAssign_ = {};
+
     void stageSpool(const U1FilamentInfo& info, const char* uid);
     void clearStaged();
 };

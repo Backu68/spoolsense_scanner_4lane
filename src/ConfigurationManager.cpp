@@ -364,6 +364,9 @@ bool ConfigurationManager::loadFromNVS() {
     if (prefs.isKey(NVS_KEY_U1_CHANNEL)) {
         uint8_t ch = prefs.getUChar(NVS_KEY_U1_CHANNEL, 0);
         _u1Channel = (ch <= 3) ? ch : 0;  // clamp invalid values from NVS
+        anyOverride = true;
+    }
+    if (prefs.isKey(NVS_KEY_U1_MODE)) {
         uint8_t mode = prefs.getUChar(NVS_KEY_U1_MODE, 0);
         _u1Mode = (mode <= 1) ? mode : 0;
         anyOverride = true;
