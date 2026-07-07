@@ -58,6 +58,11 @@ public:
     // Set before write flow starts; consumed on first tag sync within PENDING_LINK_TIMEOUT_MS.
     void setPendingLink(int32_t spoolId);
 
+    // Pending-link state for the web UI's link-only flow: returns true while a
+    // link is armed and unexpired, filling the target spool and remaining ms.
+    // Returns false once consumed by a sync or timed out.
+    bool getPendingLinkState(int32_t& outSpoolId, uint32_t& outRemainingMs) const;
+
     // Streaming nfc_id → spool id lookup (no spool-count cap, archived spools
     // excluded). Does NOT take the HTTP mutex — the caller must already hold the
     // shared g_httpMutex. Returns id >= 0 on match, -1 not found, -2 lookup

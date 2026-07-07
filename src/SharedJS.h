@@ -438,6 +438,56 @@ function selectSpoolmanSpool(spoolId) {
   _selectedSpoolId = spoolId;
   var spool = _spoolmanPickerSpools.find(function(s) { return s.id === spoolId; });
   if (spool) fillFromSpoolman(spool, _spoolmanPickerFieldMap);
+  renderLinkOnlyBar(spoolId);
+}
+
+// "Link tag (no write)" — bind an already-written tag to the selected spool
+// without touching the tag. Arms the firmware pending link and reports the
+// outcome by polling: armed=false with time left means a sync consumed it.
+function renderLinkOnlyBar(spoolId) {
+  var results = document.getElementById('spoolmanPickerResults');
+  if (!results) return;
+  var bar = document.getElementById('linkOnlyBar');
+  if (!bar) {
+    bar = document.createElement('div');
+    bar.id = 'linkOnlyBar';
+    bar.style.cssText = 'margin-top:8px;padding:10px;border:1px solid var(--border);border-radius:8px;font-size:0.92em';
+    results.parentNode.insertBefore(bar, results.nextSibling);
+  }
+  bar.innerHTML = 'Spool #' + spoolId + ' selected \u2014 '
+    + '<button type="button" onclick="linkTagOnly(' + spoolId + ')" '
+    + 'style="padding:6px 12px;border-radius:8px;border:1px solid var(--accent);background:transparent;color:var(--accent);cursor:pointer">'
+    + 'Link tag (no write)</button>'
+    + '<div id="linkOnlyStatus" style="margin-top:6px;opacity:0.75"></div>';
+}
+
+async function linkTagOnly(spoolId) {
+  var status = document.getElementById('linkOnlyStatus');
+  try {
+    await api('/api/spoolman/pending-link', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({spool_id: spoolId})
+    });
+  } catch (e) {
+    if (status) status.textContent = 'Could not arm the link \u2014 is the scanner reachable?';
+    return;
+  }
+  _selectedSpoolId = -1;  // consumed by this flow — do not re-arm on Write Tag
+  var deadline = Date.now() + 125000;
+  while (Date.now() < deadline) {
+    var st = null;
+    try { st = await api('/api/spoolman/pending-link'); } catch (e) {}
+    if (st && st.armed === false) {
+      if (status) status.textContent = '\u2713 Tag linked to spool #' + spoolId + '.';
+      return;
+    }
+    var secs = st && st.remaining_ms ? Math.ceil(st.remaining_ms / 1000) : Math.ceil((deadline - Date.now()) / 1000);
+    if (status) status.textContent = 'Place the tag on the reader now (' + secs + 's). '
+      + 'If it\u2019s already sitting there, lift it off and set it back down.';
+    await sleep(1000);
+  }
+  if (status) status.textContent = 'Link window expired \u2014 select the spool and try again.';
 }
 
 function fillFromSpoolman(spool, fieldMap) {

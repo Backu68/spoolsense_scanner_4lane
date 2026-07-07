@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- **"Link tag (no write)" button** — selecting a spool in the Import-from-Spoolman picker now offers linking an already-written tag to that spool without rewriting it. The button arms the link window and guides the scan ("lift it off and set it back down" — links bind on fresh tag arrival), then confirms the link or reports expiry via a new pending-link status endpoint. Previously the link only armed as part of a tag write, and there was no feedback at all.
+
 ## [1.8.0] - 2026-07-06
 
 ### Security

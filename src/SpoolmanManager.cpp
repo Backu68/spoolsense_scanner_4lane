@@ -1648,6 +1648,16 @@ int SpoolmanManager::findFilamentNoLock(int vendorId, const char* material,
     return streamFindFilament(vendorId, material, colorHex6, name ? name : "");
 }
 
+bool SpoolmanManager::getPendingLinkState(int32_t& outSpoolId, uint32_t& outRemainingMs) const {
+    int32_t id = pendingLinkSpoolId_.load();
+    if (id <= 0) return false;
+    uint32_t age = millis() - pendingLinkSetAt_.load();
+    if (age >= PENDING_LINK_TIMEOUT_MS) return false;
+    outSpoolId = id;
+    outRemainingMs = PENDING_LINK_TIMEOUT_MS - age;
+    return true;
+}
+
 int SpoolmanManager::findVendorNoLock(const char* name, char* outName, size_t outNameSize) {
     return streamFindVendorByName(name, outName, outNameSize);
 }

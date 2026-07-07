@@ -139,6 +139,7 @@ bool WebServerManager::begin(bool apMode, uint16_t port) {
     _server.on("/api/spoolman/spools", HTTP_GET,  [this]() { handleApiSpoolmanSpools(); });
     _server.on("/api/spoolman/link",         HTTP_POST, [this]() { handleApiSpoolmanLink(); });
     _server.on("/api/spoolman/pending-link", HTTP_POST, [this]() { handleApiSpoolmanPendingLink(); });
+    _server.on("/api/spoolman/pending-link", HTTP_GET, [this]() { handleApiSpoolmanPendingLink(); });
     _server.on("/api/spoolman/find-vendor",     HTTP_GET,  [this]() { handleApiSpoolmanFindVendor(); });
     _server.on("/api/spoolman/find-filament",   HTTP_GET,  [this]() { handleApiSpoolmanFindFilament(); });
     _server.on("/api/spoolman/save-enrichment", HTTP_POST, [this]() { handleApiSpoolmanSaveEnrichment(); });
@@ -593,6 +594,18 @@ void WebServerManager::handleApiSpoolmanLink() {
 }
 
 void WebServerManager::handleApiSpoolmanPendingLink() {
+    if (_server.method() == HTTP_GET) {
+        // Link-only flow polls this to show "linked" vs "expired": armed goes
+        // false the moment a sync consumes the link or the window lapses
+        int32_t spoolId = -1;
+        uint32_t remainingMs = 0;
+        bool armed = SpoolmanManager::getInstance().getPendingLinkState(spoolId, remainingMs);
+        char body[96];
+        snprintf(body, sizeof(body), "{\"armed\":%s,\"spool_id\":%ld,\"remaining_ms\":%lu}",
+                 armed ? "true" : "false", (long)spoolId, (unsigned long)remainingMs);
+        _server.send(200, "application/json", body);
+        return;
+    }
 
     StaticJsonDocument<128> doc;
     if (deserializeJson(doc, _server.arg("plain"))) {
