@@ -2,6 +2,9 @@
 #define U1_MANAGER_H
 
 #include <cstdint>
+#ifndef NATIVE_TEST
+#include <freertos/FreeRTOS.h>
+#endif
 
 // Forward declarations to keep this header lean — full definitions live in
 // ApplicationManager.h (payload types) and NFCTypes.h (CurrentSpoolState).
@@ -49,6 +52,28 @@ class U1Manager {
 public:
     static U1Manager& getInstance();
 
+    // ── Stage mode (#Phase 2) ────────────────────────────────────────────
+    // In stage mode, scans are staged instead of posted; the user then picks
+    // the channel via the web UI picker or the keypad (both always available;
+    // neither is required hardware). A staged spool expires after
+    // STAGE_TTL_MS if unassigned.
+    struct StagedState {
+        bool active = false;
+        uint32_t remainingMs = 0;
+        char vendor[64] = {};
+        char material[24] = {};
+        int rgb = -1;              // -1 = unknown color
+    };
+    // Thread-safe snapshot for the web UI (/api/status) — callable from any task
+    StagedState getStagedState();
+    // Assign the staged spool to a channel (0-3) and POST it. Must be called
+    // from the ApplicationManager dispatch loop (same thread as publishes).
+    // Returns false if nothing is staged / expired / POST failed.
+    bool assignStagedToChannel(uint8_t channel);
+    // True when a staged spool is waiting — used by the keypad flow to route
+    // digits to channel selection. Dispatch-loop only.
+    bool hasStagedSpool();
+
     // Smart tag scan path. Builds U1 info from on-tag data + per-material
     // defaults, POSTs to /printer/filament_detect/set, and (if anything is
     // still missing and Spoolman is configured) registers a pending augment
@@ -86,6 +111,22 @@ private:
     };
     PendingAugment pendingAugment_ = {};
     static constexpr uint32_t PENDING_AUGMENT_TTL_MS = 30000;
+
+    // Stage-mode holding area. Written on the dispatch loop; snapshotted by
+    // the web task via getStagedState() — guarded by a critical section since
+    // the copy is a few dozen bytes.
+    struct StagedSpool {
+        bool active = false;
+        uint32_t expiresAtMs = 0;
+        char uid[17] = {};
+        U1FilamentInfo info;
+    };
+    StagedSpool staged_ = {};
+    portMUX_TYPE stagedMux_ = portMUX_INITIALIZER_UNLOCKED;
+    static constexpr uint32_t STAGE_TTL_MS = 30000;
+
+    void stageSpool(const U1FilamentInfo& info, const char* uid);
+    void clearStaged();
 };
 
 #endif // U1_MANAGER_H

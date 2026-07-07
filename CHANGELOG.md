@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- **Snapmaker U1 stage mode** — one scanner now serves all four U1 toolheads. In stage mode (Config → Snapmaker U1 → Channel Mode), a scan is held for 30 seconds while you pick the channel: a T0–T3 picker with live countdown appears on the reader page, or type the channel digit + `#` on a keypad if one is fitted (keypad optional — the web picker needs no extra hardware). Spoolman enrichment still applies while the spool is staged, so the assignment posts the augmented data. Fixed-channel mode (one scanner per toolhead) remains the default and is unchanged. Phase 2 of the U1 integration; motion-sensor auto-pick is Phase 3.
+
 ## [1.8.0] - 2026-07-06
 
 ### Security

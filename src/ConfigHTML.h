@@ -169,6 +169,14 @@ const char CONFIG_HTML[] PROGMEM = R"rawliteral(
             </div>
             <div id="u1_fields" style="display:none">
               <div class="field">
+                <label for="u1_mode">Channel Mode</label>
+                <select id="u1_mode" style="padding:6px 10px;border-radius:6px;border:1px solid var(--border);background:var(--card);color:var(--text);font-size:0.95em">
+                  <option value="0">Fixed — this scanner is bound to one channel</option>
+                  <option value="1">Stage — pick the channel after each scan</option>
+                </select>
+                <div style="font-size:11px;color:#71717A;margin-top:4px">Stage mode lets one scanner serve all four toolheads: scan a spool, then pick T0&ndash;T3 on the reader page (or a keypad if fitted). The staged spool expires after 30 seconds if unassigned.</div>
+              </div>
+              <div class="field" id="u1_channel_field">
                 <label for="u1_channel">Toolhead Channel</label>
                 <select id="u1_channel" style="padding:6px 10px;border-radius:6px;border:1px solid var(--border);background:var(--card);color:var(--text);font-size:0.95em">
                   <option value="0">Channel 0 (T0)</option>
@@ -330,7 +338,9 @@ const char CONFIG_HTML[] PROGMEM = R"rawliteral(
       // Snapmaker U1 integration
       document.getElementById('u1_enabled').checked = !!cfg.u1_enabled;
       if (cfg.u1_channel !== undefined) document.getElementById('u1_channel').value = cfg.u1_channel;
+      if (cfg.u1_mode !== undefined) document.getElementById('u1_mode').value = cfg.u1_mode;
       document.getElementById('u1_fields').style.display = cfg.u1_enabled ? '' : 'none';
+      document.getElementById('u1_channel_field').style.display = (cfg.u1_mode == 1) ? 'none' : '';
       // Password placeholders
       if (cfg.wifi_pass_set) document.getElementById('wifi_pass').placeholder = '(set) Leave blank to keep';
       if (cfg.mqtt_pass_set) document.getElementById('mqtt_pass').placeholder = '(set) Leave blank to keep';
@@ -360,6 +370,9 @@ const char CONFIG_HTML[] PROGMEM = R"rawliteral(
 
     // Auto-suggest hostname when U1 channel changes — only if user hasn't customized
     // beyond the default ("spoolsense" or empty). Saves the "what should I name this scanner?" decision.
+    document.getElementById('u1_mode').addEventListener('change', function() {
+      document.getElementById('u1_channel_field').style.display = (this.value == 1) ? 'none' : '';
+    });
     document.getElementById('u1_channel').addEventListener('change', function() {
       var hostInput = document.getElementById('hostname');
       var current = (hostInput.value || '').trim();
@@ -408,7 +421,8 @@ const char CONFIG_HTML[] PROGMEM = R"rawliteral(
         bambu_dashboard: document.getElementById('bambu_dashboard').checked ? 1 : 0,
         wifi_keep_awake: document.getElementById('wifi_keep_awake').checked ? 1 : 0,
         u1_enabled: document.getElementById('u1_enabled').checked ? 1 : 0,
-        u1_channel: parseInt(document.getElementById('u1_channel').value) || 0
+        u1_channel: parseInt(document.getElementById('u1_channel').value) || 0,
+        u1_mode: parseInt(document.getElementById('u1_mode').value) || 0
       };
 
       fetch('/api/config', {

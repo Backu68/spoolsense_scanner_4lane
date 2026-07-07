@@ -30,6 +30,7 @@
 #include "LogBuffer.h"
 #include "ConfigurationManager.h"
 #include "NFCManager.h"
+#include "U1Manager.h"
 #include "NFCTypes.h"
 #include "NFCWriteTypes.h"
 #include "ApplicationManager.h"
@@ -139,6 +140,7 @@ bool WebServerManager::begin(bool apMode, uint16_t port) {
     _server.on("/api/spoolman/spools", HTTP_GET,  [this]() { handleApiSpoolmanSpools(); });
     _server.on("/api/spoolman/link",         HTTP_POST, [this]() { handleApiSpoolmanLink(); });
     _server.on("/api/spoolman/pending-link", HTTP_POST, [this]() { handleApiSpoolmanPendingLink(); });
+    _server.on("/api/u1/assign", HTTP_POST, [this]() { handleApiU1Assign(); });
     _server.on("/api/spoolman/find-vendor",     HTTP_GET,  [this]() { handleApiSpoolmanFindVendor(); });
     _server.on("/api/spoolman/find-filament",   HTTP_GET,  [this]() { handleApiSpoolmanFindFilament(); });
     _server.on("/api/spoolman/save-enrichment", HTTP_POST, [this]() { handleApiSpoolmanSaveEnrichment(); });
@@ -592,6 +594,33 @@ void WebServerManager::handleApiSpoolmanLink() {
     _server.send(200, "application/json", "{\"success\":true}");
 }
 
+void WebServerManager::handleApiU1Assign() {
+    // Same task as the ApplicationManager dispatch loop (both run from loop()),
+    // so calling the U1Manager directly is single-threaded by construction
+    StaticJsonDocument<64> doc;
+    if (deserializeJson(doc, _server.arg("plain"))) {
+        sendError(400, "Invalid JSON");
+        return;
+    }
+    int channel = doc["channel"] | -1;
+    if (channel < 0 || channel > 3) {
+        sendError(400, "channel must be 0-3");
+        return;
+    }
+    if (!U1Manager::getInstance().hasStagedSpool()) {
+        sendError(409, "Nothing staged — scan a tag first");
+        return;
+    }
+    bool ok = U1Manager::getInstance().assignStagedToChannel((uint8_t)channel);
+    if (!ok) {
+        sendError(502, "U1 rejected the assignment — check Moonraker/printer");
+        return;
+    }
+    char body[48];
+    snprintf(body, sizeof(body), "{\"success\":true,\"channel\":%d}", channel);
+    _server.send(200, "application/json", body);
+}
+
 void WebServerManager::handleApiSpoolmanPendingLink() {
 
     StaticJsonDocument<128> doc;
@@ -751,6 +780,7 @@ void WebServerManager::handleApiGetConfig() {
     doc["wifi_keep_awake"] = cfg.wifi_keep_awake;
     doc["u1_enabled"] = cfg.u1_enabled;
     doc["u1_channel"] = cfg.u1_channel;
+    doc["u1_mode"] = cfg.u1_mode;
     // led_pin: emit "" for the default sentinel so the web field shows empty
     if (cfg.led_pin == LED_PIN_DEFAULT) {
         doc["led_pin"] = "";
@@ -819,6 +849,8 @@ void WebServerManager::handleApiPostConfig() {
     {
         uint8_t ch = doc["u1_channel"] | (uint8_t)0;
         update.u1_channel = (ch <= 3) ? ch : 0;  // clamp invalid client input
+        uint8_t mode = doc["u1_mode"] | (uint8_t)0;
+        update.u1_mode = (mode <= 1) ? mode : 0;
     }
     {
         // Sent as a string so empty (= board default) is distinguishable from GPIO 0.
@@ -1302,6 +1334,19 @@ void WebServerManager::handleApiStatus() {
     HomeAssistantManager::getDeviceId(deviceId, sizeof(deviceId));
     doc["device_id"] = deviceId;
     doc["firmware_version"] = FIRMWARE_VERSION;
+
+    // U1 stage mode: surface the staged spool so the reader page can show
+    // the channel picker with a live countdown
+    {
+        U1Manager::StagedState st = U1Manager::getInstance().getStagedState();
+        if (st.active) {
+            JsonObject staged = doc.createNestedObject("u1_staged");
+            staged["remaining_ms"] = st.remainingMs;
+            staged["vendor"] = st.vendor;
+            staged["material"] = st.material;
+            if (st.rgb >= 0) staged["rgb"] = st.rgb;
+        }
+    }
 
     if (NFCManager::getInstance().getCurrentSpoolState(state) && state.present) {
         doc["present"] = true;
