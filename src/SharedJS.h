@@ -427,7 +427,8 @@ function filterSpoolmanPicker(spools, query, fieldMap) {
     var color = (fil.color_hex || '').replace(/[^0-9a-fA-F]/g, '');
     var swatch = color ? '<span style="display:inline-block;width:14px;height:14px;border-radius:50%;background:#' + color + ';vertical-align:middle;margin-right:6px"></span>' : '';
     var remaining = spool.remaining_weight ? Math.round(spool.remaining_weight) + 'g' : '?';
-    var spoolId = spool.id;
+    var spoolId = Number(spool.id);
+    if (!isFinite(spoolId) || spoolId <= 0) return '';
     return '<div style="padding:8px 10px;border-bottom:1px solid var(--border);cursor:pointer" onclick="selectSpoolmanSpool(' + spoolId + ')">'
       + swatch + '#' + spoolId + ' ' + (vendor ? esc(vendor) + ' ' : '') + esc(fil.material || fil.name || '?') + ' \u2014 ' + remaining
       + '</div>';
