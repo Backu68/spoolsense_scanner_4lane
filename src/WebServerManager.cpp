@@ -139,6 +139,7 @@ bool WebServerManager::begin(bool apMode, uint16_t port) {
     _server.on("/api/spoolman/spools", HTTP_GET,  [this]() { handleApiSpoolmanSpools(); });
     _server.on("/api/spoolman/link",         HTTP_POST, [this]() { handleApiSpoolmanLink(); });
     _server.on("/api/spoolman/pending-link", HTTP_POST, [this]() { handleApiSpoolmanPendingLink(); });
+    _server.on("/api/spoolman/pending-link", HTTP_GET, [this]() { handleApiSpoolmanPendingLink(); });
     _server.on("/api/spoolman/find-vendor",     HTTP_GET,  [this]() { handleApiSpoolmanFindVendor(); });
     _server.on("/api/spoolman/find-filament",   HTTP_GET,  [this]() { handleApiSpoolmanFindFilament(); });
     _server.on("/api/spoolman/save-enrichment", HTTP_POST, [this]() { handleApiSpoolmanSaveEnrichment(); });
@@ -593,6 +594,25 @@ void WebServerManager::handleApiSpoolmanLink() {
 }
 
 void WebServerManager::handleApiSpoolmanPendingLink() {
+    if (_server.method() == HTTP_GET) {
+        // Link-only flow polls this. States: armed (countdown), consumed
+        // (with the real PATCH outcome + the tag that took it), expired, idle.
+        auto st = SpoolmanManager::getInstance().getPendingLinkStatus();
+        const char* stateStr = "idle";
+        switch (st.state) {
+            case SpoolmanManager::PendingLinkState::Armed:    stateStr = "armed"; break;
+            case SpoolmanManager::PendingLinkState::Consumed: stateStr = "consumed"; break;
+            case SpoolmanManager::PendingLinkState::Expired:  stateStr = "expired"; break;
+            default: break;
+        }
+        char body[160];
+        snprintf(body, sizeof(body),
+                 "{\"state\":\"%s\",\"spool_id\":%ld,\"remaining_ms\":%lu,\"link_ok\":%s,\"uid\":\"%s\"}",
+                 stateStr, (long)st.spoolId, (unsigned long)st.remainingMs,
+                 st.linkOk ? "true" : "false", st.uid);
+        _server.send(200, "application/json", body);
+        return;
+    }
 
     StaticJsonDocument<128> doc;
     if (deserializeJson(doc, _server.arg("plain"))) {

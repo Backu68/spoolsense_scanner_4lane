@@ -1553,6 +1553,48 @@ int SpoolmanManager::findFilamentNoLock(int vendorId, const char* material,
     return streamFindFilament(vendorId, material, colorHex6, name ? name : "");
 }
 
+void SpoolmanManager::recordLinkResult(int32_t spoolId, bool ok, const char* uid) {
+    if (xSemaphoreTake(cacheMutex_, pdMS_TO_TICKS(100)) != pdTRUE) return;
+    lastLinkResult_.spoolId = spoolId;
+    lastLinkResult_.ok = ok;
+    lastLinkResult_.atMs = millis();
+    strncpy(lastLinkResult_.uid, uid ? uid : "", sizeof(lastLinkResult_.uid) - 1);
+    lastLinkResult_.uid[sizeof(lastLinkResult_.uid) - 1] = '\0';
+    xSemaphoreGive(cacheMutex_);
+}
+
+SpoolmanManager::PendingLinkStatus SpoolmanManager::getPendingLinkStatus() {
+    PendingLinkStatus st;
+    int32_t id = pendingLinkSpoolId_.load();
+    if (id > 0) {
+        uint32_t age = millis() - pendingLinkSetAt_.load();
+        if (age < PENDING_LINK_TIMEOUT_MS) {
+            st.state = PendingLinkState::Armed;
+            st.spoolId = id;
+            st.remainingMs = PENDING_LINK_TIMEOUT_MS - age;
+        } else {
+            // Still stored but past the window — a sync would discard it
+            st.state = PendingLinkState::Expired;
+            st.spoolId = id;
+        }
+        return st;
+    }
+    // No armed link: report the most recent consumption if it's fresh enough
+    // for the UI's polling window to care about (2x the link window)
+    if (xSemaphoreTake(cacheMutex_, pdMS_TO_TICKS(100)) == pdTRUE) {
+        if (lastLinkResult_.spoolId > 0 &&
+            (millis() - lastLinkResult_.atMs) < (2 * PENDING_LINK_TIMEOUT_MS)) {
+            st.state = PendingLinkState::Consumed;
+            st.spoolId = lastLinkResult_.spoolId;
+            st.linkOk = lastLinkResult_.ok;
+            strncpy(st.uid, lastLinkResult_.uid, sizeof(st.uid) - 1);
+            st.uid[sizeof(st.uid) - 1] = '\0';
+        }
+        xSemaphoreGive(cacheMutex_);
+    }
+    return st;
+}
+
 int SpoolmanManager::findVendorNoLock(const char* name, char* outName, size_t outNameSize) {
     return streamFindVendorByName(name, outName, outNameSize);
 }
@@ -1803,6 +1845,7 @@ bool SpoolmanManager::syncSpool(const SpoolmanSyncRequest& req, int& resolvedSpo
             } else {
                 Serial.printf("SpoolmanManager: Pending link PATCH failed (HTTP %d) for spool %d\n", patchCode, linkSpoolId);
             }
+            recordLinkResult(linkSpoolId, patchCode == 200, req.spool_id);
         } else {
             Serial.printf("SpoolmanManager: Pending link for spool %d expired (%ums old), discarding\n", linkSpoolId, age);
         }
