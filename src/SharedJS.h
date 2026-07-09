@@ -427,7 +427,8 @@ function filterSpoolmanPicker(spools, query, fieldMap) {
     var color = (fil.color_hex || '').replace(/[^0-9a-fA-F]/g, '');
     var swatch = color ? '<span style="display:inline-block;width:14px;height:14px;border-radius:50%;background:#' + color + ';vertical-align:middle;margin-right:6px"></span>' : '';
     var remaining = spool.remaining_weight ? Math.round(spool.remaining_weight) + 'g' : '?';
-    var spoolId = spool.id;
+    var spoolId = Number(spool.id);
+    if (!isFinite(spoolId) || spoolId <= 0) return '';
     return '<div style="padding:8px 10px;border-bottom:1px solid var(--border);cursor:pointer" onclick="selectSpoolmanSpool(' + spoolId + ')">'
       + swatch + '#' + spoolId + ' ' + (vendor ? esc(vendor) + ' ' : '') + esc(fil.material || fil.name || '?') + ' \u2014 ' + remaining
       + '</div>';
@@ -438,6 +439,66 @@ function selectSpoolmanSpool(spoolId) {
   _selectedSpoolId = spoolId;
   var spool = _spoolmanPickerSpools.find(function(s) { return s.id === spoolId; });
   if (spool) fillFromSpoolman(spool, _spoolmanPickerFieldMap);
+  renderLinkOnlyBar(spoolId);
+}
+
+// "Link tag (no write)" — bind an already-written tag to the selected spool
+// without touching the tag. Arms the firmware pending link and reports the
+// outcome by polling: armed=false with time left means a sync consumed it.
+function renderLinkOnlyBar(spoolId) {
+  spoolId = Number(spoolId);
+  if (!isFinite(spoolId) || spoolId <= 0) return;
+  var results = document.getElementById('spoolmanPickerResults');
+  if (!results) return;
+  var bar = document.getElementById('linkOnlyBar');
+  if (!bar) {
+    bar = document.createElement('div');
+    bar.id = 'linkOnlyBar';
+    bar.style.cssText = 'margin-top:8px;padding:10px;border:1px solid var(--border);border-radius:8px;font-size:0.92em';
+    results.parentNode.insertBefore(bar, results.nextSibling);
+  }
+  bar.innerHTML = 'Spool #' + spoolId + ' selected \u2014 '
+    + '<button type="button" onclick="linkTagOnly(' + spoolId + ')" '
+    + 'style="padding:6px 12px;border-radius:8px;border:1px solid var(--accent);background:transparent;color:var(--accent);cursor:pointer">'
+    + 'Link tag (no write)</button>'
+    + '<div id="linkOnlyStatus" style="margin-top:6px;opacity:0.75"></div>';
+}
+
+async function linkTagOnly(spoolId) {
+  spoolId = Number(spoolId);
+  if (!isFinite(spoolId) || spoolId <= 0) return;
+  var status = document.getElementById('linkOnlyStatus');
+  try {
+    await api('/api/spoolman/pending-link', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({spool_id: spoolId})
+    });
+  } catch (e) {
+    if (status) status.textContent = 'Could not arm the link \u2014 is the scanner reachable?';
+    return;
+  }
+  _selectedSpoolId = -1;  // consumed by this flow — do not re-arm on Write Tag
+  var deadline = Date.now() + 135000;
+  while (Date.now() < deadline) {
+    var st = null;
+    try { st = await api('/api/spoolman/pending-link'); } catch (e) {}
+    if (st && st.state === 'consumed' && st.spool_id === spoolId) {
+      if (status) status.textContent = st.link_ok
+        ? ('\u2713 Tag ' + (st.uid || '') + ' linked to spool #' + spoolId + '.')
+        : ('\u2717 Link failed \u2014 Spoolman rejected the update. Try again.');
+      return;
+    }
+    if (st && (st.state === 'expired' || st.state === 'idle')) {
+      if (status) status.textContent = 'Link window expired \u2014 select the spool and try again.';
+      return;
+    }
+    var secs = st && st.remaining_ms ? Math.ceil(st.remaining_ms / 1000) : Math.ceil((deadline - Date.now()) / 1000);
+    if (status) status.textContent = 'Place the tag on the reader now (' + secs + 's). '
+      + 'If it\u2019s already sitting there, lift it off and set it back down.';
+    await sleep(1000);
+  }
+  if (status) status.textContent = 'Link window expired \u2014 select the spool and try again.';
 }
 
 function fillFromSpoolman(spool, fieldMap) {

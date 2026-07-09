@@ -140,6 +140,7 @@ bool WebServerManager::begin(bool apMode, uint16_t port) {
     _server.on("/api/spoolman/spools", HTTP_GET,  [this]() { handleApiSpoolmanSpools(); });
     _server.on("/api/spoolman/link",         HTTP_POST, [this]() { handleApiSpoolmanLink(); });
     _server.on("/api/spoolman/pending-link", HTTP_POST, [this]() { handleApiSpoolmanPendingLink(); });
+    _server.on("/api/spoolman/pending-link", HTTP_GET, [this]() { handleApiSpoolmanPendingLink(); });
     _server.on("/api/u1/assign", HTTP_POST, [this]() { handleApiU1Assign(); });
     _server.on("/api/spoolman/find-vendor",     HTTP_GET,  [this]() { handleApiSpoolmanFindVendor(); });
     _server.on("/api/spoolman/find-filament",   HTTP_GET,  [this]() { handleApiSpoolmanFindFilament(); });
@@ -622,6 +623,25 @@ void WebServerManager::handleApiU1Assign() {
 }
 
 void WebServerManager::handleApiSpoolmanPendingLink() {
+    if (_server.method() == HTTP_GET) {
+        // Link-only flow polls this. States: armed (countdown), consumed
+        // (with the real PATCH outcome + the tag that took it), expired, idle.
+        auto st = SpoolmanManager::getInstance().getPendingLinkStatus();
+        const char* stateStr = "idle";
+        switch (st.state) {
+            case SpoolmanManager::PendingLinkState::Armed:    stateStr = "armed"; break;
+            case SpoolmanManager::PendingLinkState::Consumed: stateStr = "consumed"; break;
+            case SpoolmanManager::PendingLinkState::Expired:  stateStr = "expired"; break;
+            default: break;
+        }
+        char body[160];
+        snprintf(body, sizeof(body),
+                 "{\"state\":\"%s\",\"spool_id\":%ld,\"remaining_ms\":%lu,\"link_ok\":%s,\"uid\":\"%s\"}",
+                 stateStr, (long)st.spoolId, (unsigned long)st.remainingMs,
+                 st.linkOk ? "true" : "false", st.uid);
+        _server.send(200, "application/json", body);
+        return;
+    }
 
     StaticJsonDocument<128> doc;
     if (deserializeJson(doc, _server.arg("plain"))) {
@@ -2008,15 +2028,15 @@ int WebServerManager::enrichFindSpoolByUid(WiFiClient& client, HTTPClient& http,
     outFilamentMaterial = "";
     outFilamentColor = "";
 
-    // Two-step lookup (memory phase 2): the old path fetched the entire spool
-    // list into a 16KB DOM and was capped at 200 spools. The streaming search
-    // finds the id with bounded memory and no count cap; then one single-spool
-    // GET (~1KB) supplies the fields. Caller holds g_httpMutex, which the
-    // NoLock search requires.
+    // Identity via THE resolver (#224): nfc_id match, then validated cache —
+    // one precedence shared with sync/deduction/reader. The single-spool GET
+    // below (~1KB) supplies the enrichment fields. Caller holds g_httpMutex.
     // Return contract: id >= 0 found; -1 no active spool (creating is correct);
     // -2 lookup failed (transient) — callers must abort, NOT create (#218 family)
-    int spoolId = SpoolmanManager::getInstance().findSpoolIdByUidNoLock(uid);
-    if (spoolId < 0) return spoolId;
+    SpoolmanManager::SpoolResolution r = SpoolmanManager::getInstance().resolveSpoolByUidNoLock(uid);
+    if (r.lookupFailed) return -2;
+    if (r.spoolId < 0) return -1;
+    int spoolId = r.spoolId;
 
     char url[256];
     snprintf(url, sizeof(url), "%s/api/v1/spool/%d", baseUrl, spoolId);
