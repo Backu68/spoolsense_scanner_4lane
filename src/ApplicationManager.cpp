@@ -532,6 +532,11 @@ void ApplicationManager::handleSpoolDetected(const AppMessage& msg) {
     // update without waiting on Spoolman. U1Manager handles per-material defaults
     // for missing fields and registers a pending augment if Spoolman might fill gaps.
     U1Manager::getInstance().publishFromDetection(msg.payload.spoolDetected);
+    if (U1Manager::getInstance().hasStagedSpool() && display_) {
+        // Stage mode: spool is held until the user picks a channel (web UI
+        // T0-T3 picker, or keypad digit + # when a keypad is fitted)
+        display_->showText("U1: pick tool", "Web UI or 0-3 #");
+    }
 #endif
 
 #ifndef NATIVE_TEST
@@ -865,6 +870,9 @@ void ApplicationManager::handleSpoolmanSynced(const AppMessage& msg) {
         CurrentSpoolState u1State;
         NFCManager::getInstance().getCurrentSpoolState(u1State);
         U1Manager::getInstance().publishFromSpoolmanSync(msg.payload.spoolmanSynced, u1State);
+        if (U1Manager::getInstance().hasStagedSpool() && display_) {
+            display_->showText("U1: pick tool", "Web UI or 0-3 #");
+        }
     }
 #endif
 
@@ -1295,6 +1303,27 @@ void ApplicationManager::handleKeypadConfirm() {
     }
 
 #ifndef NATIVE_TEST
+    // U1 stage mode: a staged spool takes the keypad first — the typed digit
+    // is the channel (0-3). Keypad remains optional; the web picker does the
+    // same job without it.
+    if (U1Manager::getInstance().hasStagedSpool()) {
+        int channel = (keypadBufferLen_ == 1 && keypadBuffer_[0] >= '0' && keypadBuffer_[0] <= '3')
+                          ? (keypadBuffer_[0] - '0') : -1;
+        keypadBuffer_[0] = '\0';
+        keypadBufferLen_ = 0;
+        if (channel < 0) {
+            if (display_) display_->showText("U1: pick tool", "One digit 0-3, #");
+            return;
+        }
+        bool ok = U1Manager::getInstance().assignStagedToChannel((uint8_t)channel);
+        if (display_) {
+            char line[17];
+            snprintf(line, sizeof(line), "U1 tool %d", channel);
+            display_->showText(line, ok ? "Spool set" : "FAILED - retry");
+        }
+        return;
+    }
+
     // Safety: require a recent spool scan (doesn't need to be currently present on reader)
     CurrentSpoolState state;
     bool hasScannedSpool = NFCManager::getInstance().getCurrentSpoolState(state) &&

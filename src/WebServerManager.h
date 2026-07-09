@@ -70,6 +70,7 @@ private:
     void handleApiSpoolmanSpools();
     void handleApiSpoolmanLink();
     void handleApiSpoolmanPendingLink();
+    void handleApiU1Assign();
     void handleApiSpoolmanFindVendor();
     void handleApiSpoolmanFindFilament();
     void handleApiSpoolmanSaveEnrichment();

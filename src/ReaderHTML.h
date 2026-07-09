@@ -61,6 +61,18 @@ const char READER_HTML[] PROGMEM = R"rawliteral(
     </div>
 
     <div class="footer-note">Stops polling once a tag is detected.</div>
+
+    <div id="u1StagePanel" class="hidden" style="margin-top:16px;padding:14px;border:1px solid var(--accent);border-radius:12px">
+      <div style="font-weight:600;color:var(--accent);margin-bottom:4px">Snapmaker U1 &mdash; pick a toolhead</div>
+      <div id="u1StageInfo" style="font-size:0.92em;opacity:0.8;margin-bottom:10px"></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button type="button" class="btn-primary" onclick="u1Assign(0)">T0</button>
+        <button type="button" class="btn-primary" onclick="u1Assign(1)">T1</button>
+        <button type="button" class="btn-primary" onclick="u1Assign(2)">T2</button>
+        <button type="button" class="btn-primary" onclick="u1Assign(3)">T3</button>
+      </div>
+      <div id="u1StageResult" style="margin-top:8px;font-size:0.92em"></div>
+    </div>
   </div>
 
   <script src="/js/shared.js?v=)rawliteral" FIRMWARE_VERSION R"rawliteral("></script>
@@ -431,8 +443,61 @@ const char READER_HTML[] PROGMEM = R"rawliteral(
       }, 1000);
     }
 
+    var u1AssignBusy = false;
+
+    function renderU1Stage(s) {
+      var panel = document.getElementById('u1StagePanel');
+      var info = document.getElementById('u1StageInfo');
+      if (s && s.u1_staged) {
+        var st = s.u1_staged;
+        var secs = Math.ceil((st.remaining_ms || 0) / 1000);
+        var swatch = (st.rgb !== undefined && st.rgb >= 0)
+          ? '<span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:#' + ('000000' + st.rgb.toString(16)).slice(-6) + ';vertical-align:middle;margin-right:6px"></span>' : '';
+        info.innerHTML = swatch + (st.vendor ? st.vendor + ' ' : '') + (st.material || 'Spool')
+          + ' staged &mdash; expires in ' + secs + 's';
+        panel.classList.remove('hidden');
+        // The stage window outlives the tag-found poll stop — keep a light
+        // poll running so the countdown and expiry stay honest
+        if (!pollTimer && !u1AssignBusy) { pollTimer = setInterval(poll, 1000); }
+      } else if (!u1AssignBusy) {
+        if (s && s.u1_assigned !== undefined && !panel.classList.contains('hidden')) {
+          // Staged spool vanished because the motion-sensor auto-pick (or the
+          // keypad) assigned it — tell the user which tool won
+          info.innerHTML = '\u2713 Spool assigned to T' + s.u1_assigned + '.';
+          setTimeout(function(){ panel.classList.add('hidden'); }, 3000);
+        } else {
+          panel.classList.add('hidden');
+        }
+        // Nothing staged and tag already found — stop the light poll again
+        if (tagFound && pollTimer) { stopPolling(); }
+      }
+    }
+
+    async function u1Assign(ch) {
+      u1AssignBusy = true;
+      var result = document.getElementById('u1StageResult');
+      result.textContent = 'Assigning to T' + ch + '\u2026';
+      try {
+        await api('/api/u1/assign', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({channel: ch})
+        });
+        result.textContent = '\u2713 Spool set on T' + ch + '.';
+        setTimeout(function(){
+          document.getElementById('u1StagePanel').classList.add('hidden');
+          result.textContent = '';
+          u1AssignBusy = false;
+        }, 2500);
+      } catch (e) {
+        result.textContent = '\u2717 ' + (e.message || 'Assignment failed');
+        u1AssignBusy = false;
+      }
+    }
+
     function poll() {
       api('/api/status').then(function(s){
+        renderU1Stage(s);
         if (s.present) {
           render(s);
           // For generic UID tags, keep polling until Spoolman data arrives
