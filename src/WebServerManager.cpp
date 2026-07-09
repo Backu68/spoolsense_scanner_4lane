@@ -1978,15 +1978,15 @@ int WebServerManager::enrichFindSpoolByUid(WiFiClient& client, HTTPClient& http,
     outFilamentMaterial = "";
     outFilamentColor = "";
 
-    // Two-step lookup (memory phase 2): the old path fetched the entire spool
-    // list into a 16KB DOM and was capped at 200 spools. The streaming search
-    // finds the id with bounded memory and no count cap; then one single-spool
-    // GET (~1KB) supplies the fields. Caller holds g_httpMutex, which the
-    // NoLock search requires.
+    // Identity via THE resolver (#224): nfc_id match, then validated cache —
+    // one precedence shared with sync/deduction/reader. The single-spool GET
+    // below (~1KB) supplies the enrichment fields. Caller holds g_httpMutex.
     // Return contract: id >= 0 found; -1 no active spool (creating is correct);
     // -2 lookup failed (transient) — callers must abort, NOT create (#218 family)
-    int spoolId = SpoolmanManager::getInstance().findSpoolIdByUidNoLock(uid);
-    if (spoolId < 0) return spoolId;
+    SpoolmanManager::SpoolResolution r = SpoolmanManager::getInstance().resolveSpoolByUidNoLock(uid);
+    if (r.lookupFailed) return -2;
+    if (r.spoolId < 0) return -1;
+    int spoolId = r.spoolId;
 
     char url[256];
     snprintf(url, sizeof(url), "%s/api/v1/spool/%d", baseUrl, spoolId);

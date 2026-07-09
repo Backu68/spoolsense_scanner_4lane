@@ -38,24 +38,6 @@ static bool readIntValue(json_reader& reader, int& outValue) {
     return false;
 }
 
-static bool matchesUuid(const char* storedUuid, const char* uuid) {
-    if (storedUuid == nullptr || uuid == nullptr) {
-        return false;
-    }
-    if (strcmp(storedUuid, uuid) == 0) {
-        return true;
-    }
-    // Spoolman extra field may store UUID as a quoted JSON string: "\"UUID\""
-    const size_t uuidLen = strlen(uuid);
-    const size_t storedLen = strlen(storedUuid);
-    if (storedLen != uuidLen + 2) {
-        return false;
-    }
-    return storedUuid[0] == '"' &&
-           strncmp(storedUuid + 1, uuid, uuidLen) == 0 &&
-           storedUuid[uuidLen + 1] == '"' &&
-           storedUuid[uuidLen + 2] == '\0';
-}
 
 static bool readStringValue(json_reader& reader, char* out, size_t outSize) {
     if (out == nullptr || outSize == 0) {
@@ -132,22 +114,6 @@ static bool parseFirstArrayItemId(const char* jsonText, int& outId) {
     return false;
 }
 
-// parseSpoolIdByUuid removed — replaced by streamFindSpoolByNfcId (#68)
-
-static bool parseSpoolUuid(const char* jsonText, char* outUuid, size_t outUuidSize) {
-    if (outUuid == nullptr || outUuidSize == 0) return false;
-    outUuid[0] = '\0';
-    const_buffer_stream stm((const uint8_t*)jsonText, strlen(jsonText));
-    json_reader reader(stm);
-
-    while (reader.read()) {
-        if (reader.node_type() != json_node_type::field) continue;
-        if (strcmp(reader.value(), "nfc_id") != 0) continue;
-        if (!reader.read()) return false;
-        return readStringValue(reader, outUuid, outUuidSize);
-    }
-    return false;
-}
 
 // --- File-local HTTP helpers ---
 // Persistent client + http objects — reuse TCP connection across requests.
@@ -941,28 +907,6 @@ static int findOrCreateFilament(int vendorId, const SpoolmanSyncRequest& req) {
     return -1;
 }
 
-static int findSpoolByUuid(int filamentId, const char* uuid) {
-    // First try: search within this filament's spools. A -2 here is deliberately
-    // not propagated — the global fallback searches a superset, so its clean
-    // result (match or definitive -1) supersedes a scoped-lookup failure.
-    char path[128];
-    snprintf(path, sizeof(path), "/api/v1/spool?filament.id=%d", filamentId);
-    int id = streamFindSpoolByNfcId(path, uuid);
-    if (id >= 0) {
-        Serial.printf("SpoolmanManager: Found spool uuid=%s id=%d in filament=%d\n",
-                      uuid, id, filamentId);
-        return id;
-    }
-
-    // Fallback: search across all spools
-    id = streamFindSpoolByNfcId("/api/v1/spool", uuid);
-    if (id >= 0) {
-        Serial.printf("SpoolmanManager: Found spool uuid=%s id=%d via global lookup\n",
-                      uuid, id);
-    }
-
-    return id;
-}
 
 static int createSpool(int filamentId, const SpoolmanSyncRequest& req) {
     char colorHex[7];
@@ -1009,46 +953,7 @@ static int createSpool(int filamentId, const SpoolmanSyncRequest& req) {
     return -1;
 }
 
-static bool lookupSpoolById(int spoolId, const char* uuid) {
-    char path[64];
-    snprintf(path, sizeof(path), "/api/v1/spool/%d", spoolId);
-    String response;
-    int code = httpGet(path, response);
-    if (code != 200) {
-        Serial.printf("SpoolmanManager: lookupSpoolById(%d) returned %d\n", spoolId, code);
-        return false;
-    }
 
-    // An archived spool is a lookup miss even if the UUID matches — otherwise a
-    // stale NVS cache keeps PATCHing a spool the user archived in the Spoolman UI
-    if (strstr(response.c_str(), "\"archived\":true") != nullptr ||
-        strstr(response.c_str(), "\"archived\": true") != nullptr) {
-        Serial.printf("SpoolmanManager: Spool %d is archived — treating as miss\n", spoolId);
-        return false;
-    }
-
-    char tagUuid[80] = {0};
-    if (!parseSpoolUuid(response.c_str(), tagUuid, sizeof(tagUuid))) {
-        Serial.printf("SpoolmanManager: Spool %d has no extra field\n", spoolId);
-        return false;
-    }
-
-    if (matchesUuid(tagUuid, uuid)) {
-        return true;
-    }
-
-    Serial.printf("SpoolmanManager: Spool %d UUID mismatch: '%s' != '%s'\n", spoolId, tagUuid, uuid);
-    return false;
-}
-
-static int findSpoolByUuidGlobal(const char* uuid) {
-    int id = streamFindSpoolByNfcId("/api/v1/spool", uuid);
-    if (id >= 0) {
-        Serial.printf("SpoolmanManager: Recovered spool uuid=%s id=%d via global lookup\n",
-                      uuid, id);
-    }
-    return id;
-}
 
 // Blank nfc_id on every active spool other than keepSpoolId. Re-linking a tag
 // used to leave the UID on the old spool forever, so global search, enrichment,
@@ -1151,36 +1056,26 @@ enum class SpoolReconcileAction {
 // resolve the same physical filament to a different id (user-named filaments,
 // enrichment-created variants, vendor coerced by the tag format's brand field —
 // #218). Only a real material or color change means the tag moved.
-static SpoolReconcileAction reconcileSpool(int existingSpoolId, int newFilamentId,
+static SpoolReconcileAction reconcileSpool(int existingSpoolId,
+                                           const SpoolmanManager::SpoolCore& core,
+                                           int newFilamentId,
                                            const SpoolmanSyncRequest& req) {
-    // Fetch the existing spool's data from Spoolman
-    char path[64];
-    snprintf(path, sizeof(path), "/api/v1/spool/%d", existingSpoolId);
-    String response;
-    int code = httpGet(path, response);
-    if (code != 200) return SpoolReconcileAction::KeepSpool;
-
-    // Heap doc: needs capacity for the nested filament object + extras, and
-    // SpoolmanSync's measured stack floor is under 2KB. Overflow fails to
-    // KeepSpool (never archives on unparseable data).
-    DynamicJsonDocument doc(3072);
-    DeserializationError err = deserializeJson(doc, response);
-    if (err) return SpoolReconcileAction::KeepSpool;
+    // The resolver already fetched this spool's snapshot (one bounded GET
+    // feeds identity and reconciliation) — no second fetch here.
 
     // A user-linked spool (writer picker / explicit re-link) is pinned: never
     // auto-archived or re-pointed, weight still syncs. The tag's identity fields
     // are stale by definition once a user overrides them (#218).
-    const char* linkMark = doc["extra"]["nfc_link"] | "";
-    if (strstr(linkMark, "user") != nullptr) {
+    if (core.userLinked) {
         Serial.printf("SpoolmanManager: Spool %d is user-linked — keeping\n", existingSpoolId);
         return SpoolReconcileAction::KeepSpoolWeightOnly;
     }
 
-    int oldFilamentId = doc["filament"]["id"] | -1;
+    int oldFilamentId = core.filamentId;
     bool idDiffersButSameFilament = false;
     if (oldFilamentId >= 0 && newFilamentId >= 0 && oldFilamentId != newFilamentId) {
-        const char* oldMaterial = doc["filament"]["material"] | "";
-        const char* oldColor    = doc["filament"]["color_hex"] | "";
+        const char* oldMaterial = core.filamentMaterial;
+        const char* oldColor    = core.filamentColor;
         if (oldColor[0] == '#') oldColor++;
         const char* newMaterial = materialTypeToSpoolmanStr(req.material_type);
         char newColor[7];
@@ -1215,7 +1110,7 @@ static SpoolReconcileAction reconcileSpool(int existingSpoolId, int newFilamentI
     static constexpr float LOW_SPOOL_THRESHOLD_G = 100.0f;
     static constexpr float WEIGHT_JUMP_THRESHOLD_G = 500.0f;
 
-    float oldRemaining = doc["remaining_weight"] | -1.0f;
+    float oldRemaining = core.remainingWeight;
     if (oldRemaining >= 0.0f &&
         oldRemaining <= LOW_SPOOL_THRESHOLD_G &&
         req.remaining_weight_g > (oldRemaining + WEIGHT_JUMP_THRESHOLD_G)) {
@@ -1237,6 +1132,14 @@ static bool updateSpool(int spoolId, int filamentId, float remainingWeight) {
     }
     if (filamentId >= 0) {
         doc["filament_id"] = filamentId;
+    }
+
+    // Weightless tag + weight-only action = nothing to send. Spoolman rejects
+    // an empty PATCH with 422, and the failed sync would retry every detect
+    // cycle (found on bench: user-linked OpenSpool tag with no weight data).
+    if (doc.size() == 0) {
+        Serial.printf("SpoolmanManager: Spool %d — nothing to update, skipping PATCH\n", spoolId);
+        return true;
     }
 
     String body;
@@ -1618,12 +1521,14 @@ bool SpoolmanManager::lookupSpoolByUid(const char* uid, SpoolDetails& outDetails
         return false;
     }
 
-    int spoolmanId = streamFindSpoolByNfcId("/api/v1/spool", uid);
-    if (spoolmanId < 0) {
-        Serial.printf("SpoolmanManager: UID lookup — no match for uid=%s\n", uid);
+    SpoolResolution r = resolveSpoolByUidNoLock(uid);
+    if (r.spoolId < 0) {
+        Serial.printf("SpoolmanManager: UID lookup — no match for uid=%s%s\n",
+                      uid, r.lookupFailed ? " (lookup failed)" : "");
         xSemaphoreGive(httpMutex_);
         return false;
     }
+    int spoolmanId = r.spoolId;
 
     bool ok = getSpoolDetails(spoolmanId, outDetails);
     xSemaphoreGive(httpMutex_);
@@ -1694,6 +1599,116 @@ int SpoolmanManager::findVendorNoLock(const char* name, char* outName, size_t ou
     return streamFindVendorByName(name, outName, outNameSize);
 }
 
+bool SpoolmanManager::fetchSpoolCore(int32_t spoolId, SpoolCore& out) {
+    char path[64];
+    snprintf(path, sizeof(path), "/api/v1/spool/%ld", (long)spoolId);
+    String resp;
+    int code = httpGet(path, resp);
+    if (code == 404) {
+        // Definitively gone — callers treat as unusable candidate, not failure
+        out = SpoolCore{};
+        out.archived = true;
+        return true;
+    }
+    if (code != 200) return false;
+
+    DynamicJsonDocument doc(3072);
+    if (deserializeJson(doc, resp) != DeserializationError::Ok) return false;
+
+    out.archived = doc["archived"] | false;
+    out.filamentId = doc["filament"]["id"] | -1;
+    out.remainingWeight = doc["remaining_weight"] | -1.0f;
+    const char* link = doc["extra"]["nfc_link"] | "";
+    out.userLinked = (strstr(link, "user") != nullptr);
+    const char* nfc = doc["extra"]["nfc_id"] | "";
+    strncpy(out.nfcId, nfc, sizeof(out.nfcId) - 1);
+    out.nfcId[sizeof(out.nfcId) - 1] = '\0';
+    const char* mat = doc["filament"]["material"] | "";
+    strncpy(out.filamentMaterial, mat, sizeof(out.filamentMaterial) - 1);
+    out.filamentMaterial[sizeof(out.filamentMaterial) - 1] = '\0';
+    const char* col = doc["filament"]["color_hex"] | "";
+    strncpy(out.filamentColor, col, sizeof(out.filamentColor) - 1);
+    out.filamentColor[sizeof(out.filamentColor) - 1] = '\0';
+    return true;
+}
+
+// A candidate spool (from tag id or cache) is usable for this tag only if it
+// still exists, is unarchived, and its stored nfc_id is empty or this tag's —
+// a spool already claimed by a DIFFERENT tag means the reference is stale.
+bool SpoolmanManager::spoolUsableForUid(const SpoolCore& core, const char* uid) {
+    if (core.archived) return false;
+    if (core.nfcId[0] == '\0') return true;
+    char quoted[44];
+    snprintf(quoted, sizeof(quoted), "\"%s\"", uid);
+    return strcasecmp(core.nfcId, uid) == 0 || strcasecmp(core.nfcId, quoted) == 0;
+}
+
+SpoolmanManager::SpoolResolution SpoolmanManager::resolveSpoolByUidNoLock(const char* uid, int32_t tagSpoolmanId) {
+    SpoolResolution res;
+    if (uid == nullptr || uid[0] == '\0') return res;
+
+    // 1. Global nfc_id match — the tag's durable identity in Spoolman
+    int byNfc = streamFindSpoolByNfcId("/api/v1/spool", uid);
+    if (byNfc == -2) {
+        res.lookupFailed = true;
+        return res;
+    }
+    if (byNfc >= 0) {
+        res.spoolId = byNfc;
+        res.source = SpoolResolution::Source::NfcId;
+        if (fetchSpoolCore(byNfc, res.core)) {
+            res.coreValid = true;
+            res.filamentId = res.core.filamentId;
+            res.userLinked = res.core.userLinked;
+        }
+        storeCachedSpoolmanId(uid, byNfc);
+        return res;
+    }
+
+    // 2. Tag-stored spoolman_id — validated, never trusted blindly
+    if (tagSpoolmanId > 0) {
+        SpoolCore core;
+        if (!fetchSpoolCore(tagSpoolmanId, core)) {
+            res.lookupFailed = true;
+            return res;
+        }
+        if (spoolUsableForUid(core, uid)) {
+            res.spoolId = tagSpoolmanId;
+            res.filamentId = core.filamentId;
+            res.userLinked = core.userLinked;
+            res.core = core;
+            res.coreValid = true;
+            res.source = SpoolResolution::Source::TagId;
+            storeCachedSpoolmanId(uid, tagSpoolmanId);
+            return res;
+        }
+        Serial.printf("SpoolmanManager: tag spoolman_id=%ld stale for uid=%s — ignoring\n",
+                      (long)tagSpoolmanId, uid);
+    }
+
+    // 3. Cached uid→id — validated; the resolver is the single eviction point
+    int32_t cached = lookupCachedSpoolmanId(uid);
+    if (cached > 0 && cached != tagSpoolmanId) {
+        SpoolCore core;
+        if (!fetchSpoolCore(cached, core)) {
+            res.lookupFailed = true;
+            return res;
+        }
+        if (spoolUsableForUid(core, uid)) {
+            res.spoolId = cached;
+            res.filamentId = core.filamentId;
+            res.userLinked = core.userLinked;
+            res.core = core;
+            res.coreValid = true;
+            res.source = SpoolResolution::Source::Cache;
+            return res;
+        }
+        invalidateCachedSpoolmanId(uid);
+    }
+
+    return res;  // clean not-found: creation is allowed
+}
+
 int SpoolmanManager::findSpoolIdByUidNoLock(const char* uid) {
     // Pass -2 (transport/parse failure) through unchanged: callers must NOT
     // treat a failed lookup as not-found, or transient errors create duplicates
@@ -1707,12 +1722,14 @@ float SpoolmanManager::deductFromSpoolman(const char* uid, float grams) {
         return 0.0f;
     }
 
-    int spoolId = findSpoolByUuidGlobal(uid);
-    if (spoolId < 0) {
-        Serial.printf("SpoolmanManager: deductFromSpoolman — spool not found for %s\n", uid);
+    SpoolResolution r = resolveSpoolByUidNoLock(uid);
+    if (r.spoolId < 0) {
+        Serial.printf("SpoolmanManager: deductFromSpoolman — spool not found for %s%s\n",
+                      uid, r.lookupFailed ? " (lookup failed, retry later)" : "");
         xSemaphoreGive(httpMutex_);
         return 0.0f;
     }
+    int spoolId = r.spoolId;
 
     // Get current remaining weight
     char path[64];
@@ -1834,188 +1851,95 @@ bool SpoolmanManager::syncSpool(const SpoolmanSyncRequest& req, int& resolvedSpo
         }
     }
 
-    // Prefer a known-good ID for this spool UID over potentially stale tag data.
-    int32_t preferredSpoolmanId = req.spoolman_id;
-    int32_t cachedSpoolmanId = lookupCachedSpoolmanId(req.spool_id);
-    if (cachedSpoolmanId > 0 && cachedSpoolmanId != req.spoolman_id) {
-        Serial.printf("SpoolmanManager: Using cached spoolman_id=%d for spool %s (tag had %d)\n",
-                      cachedSpoolmanId, req.spool_id, req.spoolman_id);
-        preferredSpoolmanId = cachedSpoolmanId;
-    }
-
-    // Fast path: if we have a spoolman_id (from cache or tag), try direct lookup.
-    if (preferredSpoolmanId > 0) {
-        Serial.printf("SpoolmanManager: Fast path - looking up spool %d\n", preferredSpoolmanId);
-        if (lookupSpoolById(preferredSpoolmanId, req.spool_id)) {
-            // UUID matches — resolve the new filament to check for re-tagging
-            int vendorId = findOrCreateVendor(req.manufacturer);
-            int filamentId = (vendorId >= 0) ? findOrCreateFilament(vendorId, req) : -1;
-
-            SpoolReconcileAction action;
-            if (preferredSpoolmanId == justLinkedSpoolId) {
-                action = SpoolReconcileAction::KeepSpoolWeightOnly;
-            } else if (filamentId >= 0) {
-                action = reconcileSpool(preferredSpoolmanId, filamentId, req);
-            } else {
-                action = SpoolReconcileAction::KeepSpool;
-            }
-
-            if (action == SpoolReconcileAction::ArchiveAndReplace) {
-                archiveSpool(preferredSpoolmanId);
-                invalidateCachedSpoolmanId(req.spool_id);
-                // Fall through to slow path to create a new spool
-            } else {
-                int syncFilamentId = (action == SpoolReconcileAction::KeepSpoolWeightOnly) ? -1 : filamentId;
-                // Check sync cache — skip PATCH if nothing changed
-                if (isSyncCacheHit(req.spool_id, preferredSpoolmanId, syncFilamentId, req.remaining_weight_g)) {
-                    resolvedSpoolmanId = preferredSpoolmanId;
-                    xSemaphoreGive(httpMutex_);
-                    return true;
-                }
-                success = updateSpool(preferredSpoolmanId, syncFilamentId, req.remaining_weight_g);
-                resolvedSpoolmanId = preferredSpoolmanId;
-                if (success) {
-                    storeCachedSpoolmanId(req.spool_id, resolvedSpoolmanId);
-                    storeSyncState(req.spool_id, resolvedSpoolmanId, syncFilamentId, req.remaining_weight_g);
-                }
-                xSemaphoreGive(httpMutex_);
-                return success;
-            }
-        }
-
-        // Stale/mismatched spoolman_id on tag (common right after tag swaps/writeback):
-        // recover by UUID before creating vendor/filament/spool to avoid duplicates.
-        int existingSpoolId = findSpoolByUuidGlobal(req.spool_id);
-        if (existingSpoolId == -2) {
-            // Lookup failed — can't tell whether this spool exists. Abort the
-            // sync instead of risking a duplicate create downstream (#218 family)
-            Serial.println("SpoolmanManager: UID lookup failed — aborting sync this cycle");
-            xSemaphoreGive(httpMutex_);
-            return false;
-        }
-        if (existingSpoolId > 0) {
-            int vendorId = findOrCreateVendor(req.manufacturer);
-            int filamentId = (vendorId >= 0) ? findOrCreateFilament(vendorId, req) : -1;
-
-            SpoolReconcileAction action;
-            if (existingSpoolId == justLinkedSpoolId) {
-                action = SpoolReconcileAction::KeepSpoolWeightOnly;
-            } else if (filamentId >= 0) {
-                action = reconcileSpool(existingSpoolId, filamentId, req);
-            } else {
-                action = SpoolReconcileAction::KeepSpool;
-            }
-
-            if (action == SpoolReconcileAction::ArchiveAndReplace) {
-                archiveSpool(existingSpoolId);
-                invalidateCachedSpoolmanId(req.spool_id);
-                // Fall through to slow path to create a new spool
-            } else {
-                int syncFilamentId = (action == SpoolReconcileAction::KeepSpoolWeightOnly) ? -1 : filamentId;
-                // Check sync cache — skip PATCH if nothing changed
-                if (isSyncCacheHit(req.spool_id, existingSpoolId, syncFilamentId, req.remaining_weight_g)) {
-                    resolvedSpoolmanId = existingSpoolId;
-                    xSemaphoreGive(httpMutex_);
-                    return true;
-                }
-                success = updateSpool(existingSpoolId, syncFilamentId, req.remaining_weight_g);
-                if (success) {
-                    resolvedSpoolmanId = existingSpoolId;
-                    storeCachedSpoolmanId(req.spool_id, resolvedSpoolmanId);
-                    storeSyncState(req.spool_id, resolvedSpoolmanId, syncFilamentId, req.remaining_weight_g);
-                    xSemaphoreGive(httpMutex_);
-                    return true;
-                }
-            }
-        }
-
-        Serial.println("SpoolmanManager: Fast path failed, falling back to slow path");
-    }
-
-    // Slow path: full vendor → filament → spool lookup/creation
-    int vendorId = findOrCreateVendor(req.manufacturer);
-    if (vendorId < 0) {
-        Serial.println("SpoolmanManager: Failed to find/create vendor");
-        LogBuffer::getInstance().logPrintf("ERROR: Failed to find/create vendor\n");
-        xSemaphoreGive(httpMutex_);
-        return false;
-    }
-
-    int filamentId = findOrCreateFilament(vendorId, req);
-    if (filamentId < 0) {
-        Serial.println("SpoolmanManager: Failed to find/create filament");
-        LogBuffer::getInstance().logPrintf("ERROR: Failed to find/create filament\n");
-        xSemaphoreGive(httpMutex_);
-        return false;
-    }
-
-    int spoolId = findSpoolByUuid(filamentId, req.spool_id);
-    if (spoolId == -2) {
-        Serial.println("SpoolmanManager: UID lookup failed — aborting sync this cycle");
-        xSemaphoreGive(httpMutex_);
-        return false;
-    }
-
-    if (spoolId < 0) {
-        // No spool with this nfc_id under the new filament.
-        // Check if another spool (different filament) has this nfc_id.
-        int oldSpoolId = findSpoolByUuidGlobal(req.spool_id);
-        if (oldSpoolId == -2) {
-            Serial.println("SpoolmanManager: UID lookup failed — aborting sync this cycle");
-            xSemaphoreGive(httpMutex_);
-            return false;
-        }
-        if (oldSpoolId > 0) {
-            SpoolReconcileAction action = (oldSpoolId == justLinkedSpoolId)
-                ? SpoolReconcileAction::KeepSpoolWeightOnly
-                : reconcileSpool(oldSpoolId, filamentId, req);
-            if (action == SpoolReconcileAction::ArchiveAndReplace) {
-                // Filament changed or weight jump — archive old, create new
-                if (archiveSpool(oldSpoolId)) {
-                    invalidateCachedSpoolmanId(req.spool_id);
-                    spoolId = createSpool(filamentId, req);
-                    success = (spoolId >= 0);
-                } else {
-                    // Archive failed — reuse old spool to prevent duplicate
-                    Serial.printf("SpoolmanManager: Archive failed, reusing spool %d to prevent duplicate\n", oldSpoolId);
-                    spoolId = oldSpoolId;
-                    success = updateSpool(spoolId, filamentId, req.remaining_weight_g);
-                }
-            } else {
-                // Same effective filament — reuse existing spool, update it
-                int syncFilamentId = (action == SpoolReconcileAction::KeepSpoolWeightOnly) ? -1 : filamentId;
-                Serial.printf("SpoolmanManager: Reusing existing spool %d (same nfc_id, no archive needed)\n", oldSpoolId);
-                spoolId = oldSpoolId;
-                success = updateSpool(spoolId, syncFilamentId, req.remaining_weight_g);
-            }
-        } else {
-            // No existing spool anywhere — create new
-            spoolId = createSpool(filamentId, req);
-            success = (spoolId >= 0);
-        }
+    // ── Identity resolution (#224) ──────────────────────────────────────
+    // One resolver answers "which spool is this tag": nfc_id match first
+    // (authoritative), then the tag-stored id validated against the live
+    // spool, then the validated cache. Everything below acts on its verdict;
+    // creation happens only on a clean not-found.
+    // Tier 0: a spool the user picked THIS sync is authoritative — it must
+    // never be outranked, even by a stale duplicate nfc_id claim that the
+    // best-effort cleanup failed to clear (Codex finding on #224).
+    SpoolResolution r;
+    if (justLinkedSpoolId > 0) {
+        r.spoolId = justLinkedSpoolId;
+        r.userLinked = true;
+        r.source = SpoolResolution::Source::UserPick;
+        r.coreValid = fetchSpoolCore(justLinkedSpoolId, r.core);
+        if (r.coreValid) r.filamentId = r.core.filamentId;
     } else {
-        // findSpoolByUuid can match via global nfc_id fallback, so a hit here does
-        // not prove same filament — run the full reconcile, not just the weight check
-        SpoolReconcileAction action = (spoolId == justLinkedSpoolId)
-            ? SpoolReconcileAction::KeepSpoolWeightOnly
-            : reconcileSpool(spoolId, filamentId, req);
+        r = resolveSpoolByUidNoLock(req.spool_id, req.spoolman_id);
+        if (r.lookupFailed) {
+            Serial.println("SpoolmanManager: identity resolution failed — aborting sync this cycle");
+            xSemaphoreGive(httpMutex_);
+            return false;
+        }
+    }
+
+    // Resolve filament identity — needed both to reconcile an existing spool
+    // and to create a new one. -2 (transient lookup failure) must not create.
+    int vendorId = findOrCreateVendor(req.manufacturer);
+    int filamentId = (vendorId >= 0) ? findOrCreateFilament(vendorId, req) : -1;
+
+    if (filamentId < 0) {
+        if (r.spoolId >= 0) {
+            // Spool is known but filament identity is unavailable this cycle —
+            // sync the weight and leave the filament pointer untouched, matching
+            // the old fast path's resilience
+            Serial.println("SpoolmanManager: filament unresolved — weight-only sync");
+            if (isSyncCacheHit(req.spool_id, r.spoolId, -1, req.remaining_weight_g)) {
+                resolvedSpoolmanId = r.spoolId;
+                xSemaphoreGive(httpMutex_);
+                return true;
+            }
+            success = updateSpool(r.spoolId, -1, req.remaining_weight_g);
+            if (success) {
+                resolvedSpoolmanId = r.spoolId;
+                storeCachedSpoolmanId(req.spool_id, resolvedSpoolmanId);
+                storeSyncState(req.spool_id, resolvedSpoolmanId, -1, req.remaining_weight_g);
+            }
+            xSemaphoreGive(httpMutex_);
+            return success;
+        }
+        Serial.println("SpoolmanManager: Failed to find/create vendor/filament");
+        LogBuffer::getInstance().logPrintf("ERROR: Failed to find/create vendor/filament\n");
+        xSemaphoreGive(httpMutex_);
+        return false;
+    }
+
+    int spoolId = -1;
+    if (r.spoolId >= 0) {
+        // Existing spool — reconcile decides keep vs archive-and-replace.
+        // A spool the user just picked this sync is never archived/re-pointed;
+        // reconcileSpool itself honors the durable nfc_link stamp (#218).
+        SpoolReconcileAction action;
+        if (r.spoolId == justLinkedSpoolId || r.source == SpoolResolution::Source::UserPick) {
+            action = SpoolReconcileAction::KeepSpoolWeightOnly;
+        } else if (!r.coreValid) {
+            // No trustworthy snapshot — archive needs positive evidence, keep
+            action = SpoolReconcileAction::KeepSpool;
+        } else {
+            action = reconcileSpool(r.spoolId, r.core, filamentId, req);
+        }
+
         if (action == SpoolReconcileAction::ArchiveAndReplace) {
-            if (archiveSpool(spoolId)) {
+            if (archiveSpool(r.spoolId)) {
                 invalidateCachedSpoolmanId(req.spool_id);
                 spoolId = createSpool(filamentId, req);
                 success = (spoolId >= 0);
             } else {
-                Serial.printf("SpoolmanManager: Archive failed, keeping spool %d\n", spoolId);
+                // Archive failed — reuse rather than mint a duplicate
+                Serial.printf("SpoolmanManager: Archive failed, reusing spool %ld\n", (long)r.spoolId);
+                spoolId = r.spoolId;
                 success = updateSpool(spoolId, filamentId, req.remaining_weight_g);
             }
         } else {
             int syncFilamentId = (action == SpoolReconcileAction::KeepSpoolWeightOnly) ? -1 : filamentId;
-            // Check sync cache — skip PATCH if nothing changed
-            if (isSyncCacheHit(req.spool_id, spoolId, syncFilamentId, req.remaining_weight_g)) {
-                resolvedSpoolmanId = spoolId;
+            if (isSyncCacheHit(req.spool_id, r.spoolId, syncFilamentId, req.remaining_weight_g)) {
+                resolvedSpoolmanId = r.spoolId;
                 xSemaphoreGive(httpMutex_);
                 return true;
             }
+            spoolId = r.spoolId;
             success = updateSpool(spoolId, syncFilamentId, req.remaining_weight_g);
             if (success) {
                 resolvedSpoolmanId = spoolId;
@@ -2025,6 +1949,13 @@ bool SpoolmanManager::syncSpool(const SpoolmanSyncRequest& req, int& resolvedSpo
             xSemaphoreGive(httpMutex_);
             return success;
         }
+    } else {
+        // Clean not-found from the resolver — creating is correct.
+        // TODO(#224 follow-up): when the resolver adopts a spool via the
+        // TagId/Cache tiers and its nfc_id is empty, stamp it (merge-
+        // preserving) so identity survives without the tag's id field.
+        spoolId = createSpool(filamentId, req);
+        success = (spoolId >= 0);
     }
 
     if (success && spoolId > 0) {
