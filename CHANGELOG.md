@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+
+- **One identity resolver for tag→spool mapping** (#224) — sync, enrichment saves, tag registration, weight deduction, and the reader lookup all resolve "which spool does this tag denote" through a single function with strict precedence: the user's explicit pick this sync, then the tag's nfc_id claim in Spoolman, then the tag-stored spool id *validated against the live spool*, then the validated cache (with eviction on failure at the same choke point). A tag pointing at a spool already claimed by a different tag is recognized as stale instead of trusted; a tag pointing at a manually-created spool with no nfc_id is adopted instead of duplicated. Transport failures are distinguished from not-found everywhere, and creation happens only on a clean miss. Replaces seven scattered mechanisms (~200 lines net removed) — the structural fix behind the historical duplicate-spool family (#91, #103, #127, #130, #134, #218).
+
 ## [1.8.0] - 2026-07-06
 
 ### Security
