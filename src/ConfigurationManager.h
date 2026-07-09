@@ -47,7 +47,9 @@ struct ConfigUpdate {
     uint8_t wifi_keep_awake;  // disable WiFi modem sleep (better RSSI, more power)
     // Snapmaker U1 direct-mode integration (extended firmware, Filament Detection: External)
     uint8_t u1_enabled;       // 0 = off, 1 = post to /printer/filament_detect/set on scans
-    uint8_t u1_channel;       // 0..3 — toolhead this scanner is bound to
+    uint8_t u1_channel;       // 0..3 — toolhead this scanner is bound to (fixed mode)
+    uint8_t u1_mode;          // 0 = fixed channel, 1 = stage (pick channel after each scan)
+    uint8_t u1_auto_pick;     // stage mode: 1 = assign to the first lane that loads (default on)
     uint8_t led_pin;          // status LED GPIO override; LED_PIN_DEFAULT = board default (#203)
 };
 
@@ -108,6 +110,9 @@ public:
     // Snapmaker U1 direct-mode (Phase 1 / fixed-channel)
     bool isU1Enabled() const;
     uint8_t getU1Channel() const;
+    // Stage mode (#Phase 2): scans are held until the user picks a channel
+    bool isU1StageMode() const;
+    bool isU1AutoPickEnabled() const;
 
     // Web config support
     void getCurrentConfig(ConfigUpdate& out) const;
@@ -164,6 +169,8 @@ private:
     // Snapmaker U1 direct-mode
     bool _u1Enabled = false;
     uint8_t _u1Channel = 0;
+    uint8_t _u1Mode = 0;   // 0 = fixed, 1 = stage
+    bool _u1AutoPick = true;  // stage mode: motion-sensor auto-assign
 
     uint8_t _ledPin = LED_PIN_DEFAULT;  // 0xFF = use board default (PIN_STATUS_LED)
 

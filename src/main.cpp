@@ -15,6 +15,7 @@
 #include "TFTManager.h"
 #include "LEDManager.h"
 #include "WebServerManager.h"
+#include "U1Manager.h"
 #include "PrinterManager.h"
 #include "PrusaLinkStrategy.h"
 #include "InputManager.h"
@@ -425,6 +426,9 @@ void loop() {
 
   // HTTP server: handle web UI requests (reader/writer pages, config, OTA)
   WebServerManager::getInstance().handleClient();
+
+  // U1 stage mode: motion-sensor auto-pick poller (no-op unless staged)
+  U1Manager::getInstance().loopTick();
 
   // Keypad polling: 4x3 matrix for ASSIGN_SPOOL tool number entry
   if (ConfigurationManager::getInstance().isKeypadEnabled()) {

@@ -30,6 +30,7 @@
 #include "LogBuffer.h"
 #include "ConfigurationManager.h"
 #include "NFCManager.h"
+#include "U1Manager.h"
 #include "NFCTypes.h"
 #include "NFCWriteTypes.h"
 #include "ApplicationManager.h"
@@ -139,6 +140,8 @@ bool WebServerManager::begin(bool apMode, uint16_t port) {
     _server.on("/api/spoolman/spools", HTTP_GET,  [this]() { handleApiSpoolmanSpools(); });
     _server.on("/api/spoolman/link",         HTTP_POST, [this]() { handleApiSpoolmanLink(); });
     _server.on("/api/spoolman/pending-link", HTTP_POST, [this]() { handleApiSpoolmanPendingLink(); });
+    _server.on("/api/spoolman/pending-link", HTTP_GET, [this]() { handleApiSpoolmanPendingLink(); });
+    _server.on("/api/u1/assign", HTTP_POST, [this]() { handleApiU1Assign(); });
     _server.on("/api/spoolman/find-vendor",     HTTP_GET,  [this]() { handleApiSpoolmanFindVendor(); });
     _server.on("/api/spoolman/find-filament",   HTTP_GET,  [this]() { handleApiSpoolmanFindFilament(); });
     _server.on("/api/spoolman/save-enrichment", HTTP_POST, [this]() { handleApiSpoolmanSaveEnrichment(); });
@@ -592,7 +595,53 @@ void WebServerManager::handleApiSpoolmanLink() {
     _server.send(200, "application/json", "{\"success\":true}");
 }
 
+void WebServerManager::handleApiU1Assign() {
+    // Same task as the ApplicationManager dispatch loop (both run from loop()),
+    // so calling the U1Manager directly is single-threaded by construction
+    StaticJsonDocument<64> doc;
+    if (deserializeJson(doc, _server.arg("plain"))) {
+        sendError(400, "Invalid JSON");
+        return;
+    }
+    int channel = doc["channel"] | -1;
+    if (channel < 0 || channel > 3) {
+        sendError(400, "channel must be 0-3");
+        return;
+    }
+    if (!U1Manager::getInstance().hasStagedSpool()) {
+        sendError(409, "Nothing staged — scan a tag first");
+        return;
+    }
+    bool ok = U1Manager::getInstance().assignStagedToChannel((uint8_t)channel);
+    if (!ok) {
+        sendError(502, "U1 rejected the assignment — check Moonraker/printer");
+        return;
+    }
+    char body[48];
+    snprintf(body, sizeof(body), "{\"success\":true,\"channel\":%d}", channel);
+    _server.send(200, "application/json", body);
+}
+
 void WebServerManager::handleApiSpoolmanPendingLink() {
+    if (_server.method() == HTTP_GET) {
+        // Link-only flow polls this. States: armed (countdown), consumed
+        // (with the real PATCH outcome + the tag that took it), expired, idle.
+        auto st = SpoolmanManager::getInstance().getPendingLinkStatus();
+        const char* stateStr = "idle";
+        switch (st.state) {
+            case SpoolmanManager::PendingLinkState::Armed:    stateStr = "armed"; break;
+            case SpoolmanManager::PendingLinkState::Consumed: stateStr = "consumed"; break;
+            case SpoolmanManager::PendingLinkState::Expired:  stateStr = "expired"; break;
+            default: break;
+        }
+        char body[160];
+        snprintf(body, sizeof(body),
+                 "{\"state\":\"%s\",\"spool_id\":%ld,\"remaining_ms\":%lu,\"link_ok\":%s,\"uid\":\"%s\"}",
+                 stateStr, (long)st.spoolId, (unsigned long)st.remainingMs,
+                 st.linkOk ? "true" : "false", st.uid);
+        _server.send(200, "application/json", body);
+        return;
+    }
 
     StaticJsonDocument<128> doc;
     if (deserializeJson(doc, _server.arg("plain"))) {
@@ -751,6 +800,8 @@ void WebServerManager::handleApiGetConfig() {
     doc["wifi_keep_awake"] = cfg.wifi_keep_awake;
     doc["u1_enabled"] = cfg.u1_enabled;
     doc["u1_channel"] = cfg.u1_channel;
+    doc["u1_mode"] = cfg.u1_mode;
+    doc["u1_auto_pick"] = cfg.u1_auto_pick;
     // led_pin: emit "" for the default sentinel so the web field shows empty
     if (cfg.led_pin == LED_PIN_DEFAULT) {
         doc["led_pin"] = "";
@@ -819,6 +870,9 @@ void WebServerManager::handleApiPostConfig() {
     {
         uint8_t ch = doc["u1_channel"] | (uint8_t)0;
         update.u1_channel = (ch <= 3) ? ch : 0;  // clamp invalid client input
+        uint8_t mode = doc["u1_mode"] | (uint8_t)0;
+        update.u1_mode = (mode <= 1) ? mode : 0;
+        update.u1_auto_pick = doc["u1_auto_pick"] | (uint8_t)1;
     }
     {
         // Sent as a string so empty (= board default) is distinguishable from GPIO 0.
@@ -1302,6 +1356,22 @@ void WebServerManager::handleApiStatus() {
     HomeAssistantManager::getDeviceId(deviceId, sizeof(deviceId));
     doc["device_id"] = deviceId;
     doc["firmware_version"] = FIRMWARE_VERSION;
+
+    // U1 stage mode: surface the staged spool so the reader page can show
+    // the channel picker with a live countdown
+    {
+        U1Manager::StagedState st = U1Manager::getInstance().getStagedState();
+        if (st.active) {
+            JsonObject staged = doc.createNestedObject("u1_staged");
+            staged["remaining_ms"] = st.remainingMs;
+            staged["vendor"] = st.vendor;
+            staged["material"] = st.material;
+            if (st.rgb >= 0) staged["rgb"] = st.rgb;
+        } else {
+            int8_t recent = U1Manager::getInstance().getRecentAssignChannel();
+            if (recent >= 0) doc["u1_assigned"] = recent;
+        }
+    }
 
     if (NFCManager::getInstance().getCurrentSpoolState(state) && state.present) {
         doc["present"] = true;
@@ -1958,15 +2028,15 @@ int WebServerManager::enrichFindSpoolByUid(WiFiClient& client, HTTPClient& http,
     outFilamentMaterial = "";
     outFilamentColor = "";
 
-    // Two-step lookup (memory phase 2): the old path fetched the entire spool
-    // list into a 16KB DOM and was capped at 200 spools. The streaming search
-    // finds the id with bounded memory and no count cap; then one single-spool
-    // GET (~1KB) supplies the fields. Caller holds g_httpMutex, which the
-    // NoLock search requires.
+    // Identity via THE resolver (#224): nfc_id match, then validated cache —
+    // one precedence shared with sync/deduction/reader. The single-spool GET
+    // below (~1KB) supplies the enrichment fields. Caller holds g_httpMutex.
     // Return contract: id >= 0 found; -1 no active spool (creating is correct);
     // -2 lookup failed (transient) — callers must abort, NOT create (#218 family)
-    int spoolId = SpoolmanManager::getInstance().findSpoolIdByUidNoLock(uid);
-    if (spoolId < 0) return spoolId;
+    SpoolmanManager::SpoolResolution r = SpoolmanManager::getInstance().resolveSpoolByUidNoLock(uid);
+    if (r.lookupFailed) return -2;
+    if (r.spoolId < 0) return -1;
+    int spoolId = r.spoolId;
 
     char url[256];
     snprintf(url, sizeof(url), "%s/api/v1/spool/%d", baseUrl, spoolId);

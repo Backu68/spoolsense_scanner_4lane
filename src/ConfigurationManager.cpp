@@ -39,6 +39,8 @@ static const char* NVS_KEY_BAMBU_DASH    = "bambu_dash";
 static const char* NVS_KEY_WIFI_AWAKE    = "wifi_awake";
 static const char* NVS_KEY_U1_ON         = "u1_on";
 static const char* NVS_KEY_U1_CHANNEL    = "u1_channel";
+static const char* NVS_KEY_U1_MODE       = "u1_mode";
+static const char* NVS_KEY_U1_AUTOPICK   = "u1_autopick";
 static const char* NVS_KEY_LED_PIN       = "led_pin";
 
 // Sanitize hostname: enforce mDNS naming constraints (lowercase alphanum + hyphens,
@@ -365,6 +367,15 @@ bool ConfigurationManager::loadFromNVS() {
         _u1Channel = (ch <= 3) ? ch : 0;  // clamp invalid values from NVS
         anyOverride = true;
     }
+    if (prefs.isKey(NVS_KEY_U1_MODE)) {
+        uint8_t mode = prefs.getUChar(NVS_KEY_U1_MODE, 0);
+        _u1Mode = (mode <= 1) ? mode : 0;
+        anyOverride = true;
+    }
+    if (prefs.isKey(NVS_KEY_U1_AUTOPICK)) {
+        _u1AutoPick = prefs.getBool(NVS_KEY_U1_AUTOPICK, true);
+        anyOverride = true;
+    }
     if (prefs.isKey(NVS_KEY_LED_PIN)) {
         _ledPin = sanitizeLedPin(prefs.getUChar(NVS_KEY_LED_PIN, LED_PIN_DEFAULT));
         anyOverride = true;
@@ -487,6 +498,14 @@ uint8_t ConfigurationManager::getU1Channel() const {
     return _u1Channel;
 }
 
+bool ConfigurationManager::isU1StageMode() const {
+    return _u1Mode == 1;
+}
+
+bool ConfigurationManager::isU1AutoPickEnabled() const {
+    return _u1AutoPick;
+}
+
 uint8_t ConfigurationManager::getLedPin() const {
     return (_ledPin == LED_PIN_DEFAULT) ? PIN_STATUS_LED : _ledPin;
 }
@@ -518,6 +537,8 @@ void ConfigurationManager::getCurrentConfig(ConfigUpdate& out) const {
     out.wifi_keep_awake = _wifiKeepAwake ? 1 : 0;
     out.u1_enabled = _u1Enabled ? 1 : 0;
     out.u1_channel = _u1Channel;
+    out.u1_mode = _u1Mode;
+    out.u1_auto_pick = _u1AutoPick ? 1 : 0;
     out.led_pin = _ledPin;
 }
 
@@ -566,6 +587,8 @@ bool ConfigurationManager::saveToNVS(const ConfigUpdate& update) {
     prefs.putBool(NVS_KEY_WIFI_AWAKE, update.wifi_keep_awake != 0);
     prefs.putBool(NVS_KEY_U1_ON, update.u1_enabled != 0);
     prefs.putUChar(NVS_KEY_U1_CHANNEL, (update.u1_channel <= 3) ? update.u1_channel : 0);
+    prefs.putUChar(NVS_KEY_U1_MODE, (update.u1_mode <= 1) ? update.u1_mode : 0);
+    prefs.putBool(NVS_KEY_U1_AUTOPICK, update.u1_auto_pick != 0);
     {
         uint8_t ledPin = sanitizeLedPin(update.led_pin);
         ledPin = rejectFeaturePins(ledPin, update.lcd_enabled != 0,
