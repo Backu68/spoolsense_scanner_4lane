@@ -472,6 +472,14 @@ static opt_error_t parse_ndef_record(const uint8_t *data, size_t data_len, size_
     *offset += type_len;
     *offset += id_len;
 
+    /* The declared payload must actually fit in the data we hold. Without
+     * this, a truncated read or hostile tag can declare up to a 64KB payload
+     * against a 44-byte buffer and every downstream region walker inherits an
+     * end pointer far past the allocation (CWE-125). */
+    if (*offset > data_len || plen > (uint32_t)(data_len - *offset)) {
+        return OPT_ERR_NDEF_PARSE;
+    }
+
     *payload_offset = (uint16_t)*offset;
     *payload_len = (uint16_t)plen;
 
