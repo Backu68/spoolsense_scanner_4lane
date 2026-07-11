@@ -143,12 +143,18 @@ uint16_t HardwareNFCConnectionPN532::readISO14443Pages(
     uint16_t totalBytes = (uint16_t)pageCount * 4;
     if (totalBytes > bufferSize) return 0;
 
+    // The NTAG READ command behind mifareultralight_ReadPage always returns
+    // 16 bytes (4 pages); the library keeps 4 and leaves the whole response in
+    // its file-scope packet buffer (frame: [7]=status, [8..23]=data), which
+    // this file already scrapes for ATQA/SAK. Harvesting all 16 bytes per
+    // round-trip cuts radio exchanges 4x — a 10-page classify read costs 3
+    // exchanges instead of 10, a 50-page NDEF read 13 instead of 50 (#242).
     uint16_t bytesRead = 0;
-    for (uint8_t i = 0; i < pageCount; i++) {
-        uint8_t page = startPage + i;
+    for (uint16_t i = 0; i < pageCount; i += 4) {
+        uint8_t page = startPage + (uint8_t)i;
         uint8_t pageBuf[4];
 
-        // Per-page retry: tag may lose activation on RF noise; reactivate and retry once
+        // Per-chunk retry: tag may lose activation on RF noise; reactivate and retry once
         if (!pn532_->mifareultralight_ReadPage(page, pageBuf)) {
             if (!reactivateTag()) return 0;  // reactivateTag also verifies tag hasn't changed
             if (!pn532_->mifareultralight_ReadPage(page, pageBuf)) {
@@ -156,8 +162,13 @@ uint16_t HardwareNFCConnectionPN532::readISO14443Pages(
             }
         }
 
-        memcpy(buffer + (i * 4), pageBuf, 4);
-        bytesRead += 4;
+        // Copy up to 4 pages from the response frame, bounded by the caller's
+        // request — never past it, so a READ that straddles the tag's last
+        // page can't leak roll-over data into the result
+        uint16_t chunkBytes = (uint16_t)(pageCount - i) * 4;
+        if (chunkBytes > 16) chunkBytes = 16;
+        memcpy(buffer + (i * 4), pn532_packetbuffer + 8, chunkBytes);
+        bytesRead += chunkBytes;
     }
 
     return bytesRead;
