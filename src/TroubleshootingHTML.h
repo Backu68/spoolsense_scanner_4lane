@@ -141,11 +141,6 @@ const char TROUBLESHOOTING_HTML[] PROGMEM = R"rawliteral(
       <button class="run-btn" id="stRunBtn" onclick="startSelfTest()">Run Self-Test</button>
       <button class="copy-btn" id="stCancelBtn" style="display:none;margin-top:10px" onclick="cancelSelfTest()">Cancel</button>
 
-      <div id="stPrompt" style="display:none;margin-top:14px;padding:12px;border:1px solid var(--accent);border-radius:10px">
-        <div id="stPromptText" style="font-size:14px;margin-bottom:10px"></div>
-        <button class="run-btn" style="margin-top:0" onclick="selfTestContinue()">Continue</button>
-      </div>
-
       <div id="stOverall" style="display:none;margin-top:14px;font-weight:700"></div>
       <div class="check-list" id="stResults" style="margin-top:12px"></div>
 
@@ -158,6 +153,15 @@ const char TROUBLESHOOTING_HTML[] PROGMEM = R"rawliteral(
     <p style="margin-top:20px;font-size:13px;color:var(--muted)">
       Need more detail? <a href="/logs" style="color:var(--blue);font-weight:600">View Serial Log</a> for live scanner output.
     </p>
+  </div>
+
+  <div id="stModal" style="display:none;position:fixed;inset:0;z-index:1000;background:rgba(0,0,0,.72);align-items:center;justify-content:center">
+    <div style="background:#15161c;border:1px solid var(--accent);border-radius:16px;padding:26px 24px;max-width:340px;margin:20px;text-align:center;box-shadow:0 14px 44px rgba(0,0,0,.55)">
+      <div style="font-size:40px;margin-bottom:6px">🏷️</div>
+      <div id="stModalText" style="font-size:15px;line-height:1.5;margin-bottom:20px">Place a tag on the reader.</div>
+      <button class="run-btn" style="margin-top:0" onclick="selfTestContinue()">Continue</button>
+      <button class="copy-btn" style="display:block;margin:12px auto 0" onclick="cancelSelfTest()">Cancel test</button>
+    </div>
   </div>
 
   <script>
@@ -377,17 +381,18 @@ const char TROUBLESHOOTING_HTML[] PROGMEM = R"rawliteral(
       });
       document.getElementById('stResults').innerHTML = html;
 
-      // Waiting-for-user prompt
-      var prompt = document.getElementById('stPrompt');
+      // Waiting-for-user prompt — a centered modal so it can't be missed
+      var modal = document.getElementById('stModal');
       if (s.waiting_for_user && s.prompt) {
-        document.getElementById('stPromptText').textContent = s.prompt;
-        prompt.style.display = 'block';
+        document.getElementById('stModalText').textContent = s.prompt;
+        modal.style.display = 'flex';
       } else {
-        prompt.style.display = 'none';
+        modal.style.display = 'none';
       }
 
       if (!s.active) {
         clearInterval(stPollTimer); stPollTimer = null;
+        modal.style.display = 'none';
         var btn = document.getElementById('stRunBtn');
         btn.disabled = false; btn.textContent = 'Run Self-Test Again';
         document.getElementById('stCancelBtn').style.display = 'none';
@@ -400,7 +405,7 @@ const char TROUBLESHOOTING_HTML[] PROGMEM = R"rawliteral(
     }
 
     async function selfTestContinue() {
-      document.getElementById('stPrompt').style.display = 'none';
+      document.getElementById('stModal').style.display = 'none';
       try { await fetch('/api/diagnostics/session/input', {method: 'POST'}); } catch (e) {}
     }
 

@@ -188,8 +188,8 @@ void DiagnosticsManager::runSession() {
             runStabilityStage();
         } else {
             addResult(DiagnosticTest::TAG_DETECTION_STABILITY, DiagnosticStatus::SKIPPED, 0, 0,
-                      "Stability test skipped (no tag / timed out)",
-                      "Re-run and place a tag on the reader when prompted.");
+                      "Stability test skipped — Continue not pressed in time",
+                      "Re-run: place a tag on the reader, then click Continue in the popup.");
         }
     }
 
