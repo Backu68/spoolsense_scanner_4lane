@@ -127,7 +127,7 @@ private:
     bool readAndParseTag(uint8_t* uid, uint8_t uid_length);
     void readAndProcessISO14443Tag(const uint8_t* uid, uint8_t uidLength, const TagScanResult& scan);
     uint16_t readNdefPayload(const struct NdefRecord& rec, const uint8_t* pageData, uint16_t bytesRead,
-                              uint8_t* outBuf, uint16_t outBufSize);
+                              uint8_t* outBuf, uint16_t outBufSize, uint16_t maxPages = 0);
     bool formatNewSpool();
     TagScanResult classifyTag(const uint8_t* uid, uint8_t uid_length);
     void sendOpenPrintTagMessage(bool suppress_spoolman_sync = false);
