@@ -1,6 +1,10 @@
 # Changelog
 
-## [1.8.2] - 2026-07-10
+## [Unreleased]
+
+### Improved
+
+- **Web UI pages load ~4× smaller** — the HTML, CSS, and JS assets are now pre-compressed at build time and served with `Content-Encoding: gzip`, cutting the total transferred from ~226 KB to ~56 KB (each page 21–35% of its former size). A `pre:` build step gzips the readable source in `src/*HTML.h` / `src/Shared*.h` into generated PROGMEM byte arrays with the firmware version baked in, so page authoring is unchanged. As a side effect the uncompressed copies are no longer compiled in, reclaiming ~174 KB of flash.
 
 ### Improved
 
