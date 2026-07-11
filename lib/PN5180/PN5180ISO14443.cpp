@@ -176,6 +176,13 @@ bool PN5180ISO14443::mifareBlockRead(uint8_t blockno, uint8_t *buffer) {
 	delay(5);
 	len = rxBytesReceived();
 	if (len == 16) {
+		// Receiver flagged a protocol/parameter error — the 16 bytes may be
+		// garbage even though a length was reported. Fail the block instead
+		// of parsing corruption (#111).
+		if (getIRQStatus() & GENERAL_ERROR_IRQ_STAT) {
+			Serial.println("PN5180: mifareBlockRead GENERAL_ERROR — discarding block");
+			return false;
+		}
 		// READ 16 bytes into  buffer
 		if (readData(16, buffer))
 		  success = true;
