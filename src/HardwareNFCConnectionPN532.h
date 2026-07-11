@@ -32,6 +32,8 @@ public:
     void logDiagnostics() override;
 
 private:
+    // Effective NFC pins from ConfigurationManager (#201); BUSY slot unused on PN532
+    uint8_t pinRst_ = 0, pinSs_ = 0, pinSck_ = 0, pinMosi_ = 0, pinMiso_ = 0;
     Adafruit_PN532* pn532_ = nullptr;
     opt_nfc_hal_t hal_;
     uint8_t currentUid_[10];
