@@ -449,6 +449,28 @@ opt_nfc_hal_t* HardwareNFCConnection::getHal() {
     return &hal_;
 }
 
+bool HardwareNFCConnection::getDiagnosticSnapshot(ReaderDiagnostics& out) {
+    memset(&out, 0, sizeof(out));
+    getReaderInfo(out.reader_name, sizeof(out.reader_name));
+    out.initialized = pn5180Ready_;
+    out.fw_major = fw_[1];
+    out.fw_minor = fw_[0];
+    out.has_registers = true;
+    out.bus_wedged = PN5180::isBusWedged();
+    // A wedged bus fails every transaction fast — its register values are
+    // meaningless, so only sample them when the bus is live.
+    if (nfc_ && !out.bus_wedged) {
+        uint32_t irq = 0, rf = 0, sys = 0;
+        nfc_->readRegister(IRQ_STATUS, &irq);
+        nfc_->readRegister(RF_STATUS, &rf);
+        nfc_->readRegister(SYSTEM_STATUS, &sys);
+        out.irq_status = irq;
+        out.rf_status = rf;
+        out.system_status = sys;
+    }
+    return true;
+}
+
 void HardwareNFCConnection::logDiagnostics() {
     if (!nfc_) {
         Serial.println("HardwareNFC DIAG: nfc_ is null!");

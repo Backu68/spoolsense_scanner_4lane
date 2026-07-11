@@ -1,6 +1,10 @@
 # Changelog
 
-## [1.8.2] - 2026-07-10
+## [Unreleased]
+
+### Added
+
+- **Self-test wizard on the Troubleshooting page** — a guided, read-only diagnostic that turns wiring/RF/power/config/network problems into plain-language recommendations and a **sanitized support report** you can paste straight into a GitHub issue (no WiFi/MQTT passwords, API keys, or full tag UIDs). It checks device/reset/heap/task-stack health; the NFC reader init, firmware, and — for the PN5180 — the live `RF_STATUS`/`IRQ_STATUS`/`SYSTEM_STATUS` registers and bus-wedged latch; and WiFi/MQTT/Spoolman/printer reachability. An optional 100-cycle **NFC stability test** (place a tag when prompted) measures detection/read success, UID consistency, and latency and reports an experimental 0–100 stability score. The stability stage cooperatively pauses the scan task at a safe boundary so it never suspends mid-SPI, and normal scanning resumes on completion, cancel, or timeout. Runs on its own low-priority task so it never blocks the web UI. (#253) _New — the stability score formula is experimental and will be tuned against known-good and marginal hardware; please report results._
 
 ### Improved
 

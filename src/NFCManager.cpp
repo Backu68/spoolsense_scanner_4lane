@@ -183,6 +183,22 @@ void NFCManager::resumeScanTask() {
 #endif
 }
 
+bool NFCManager::waitForScanPaused(uint32_t timeoutMs) {
+#ifndef NATIVE_TEST
+    // If the scan task never started, there is nothing to pause — treat the
+    // reader as immediately available to the caller.
+    if (!scanTaskHandle) return true;
+    uint32_t waited = 0;
+    while (!scanPaused_ && waited < timeoutMs) {
+        vTaskDelay(pdMS_TO_TICKS(10));
+        waited += 10;
+    }
+    return scanPaused_;
+#else
+    return true;
+#endif
+}
+
 void NFCManager::startScanTask() {
     xTaskCreatePinnedToCore(
         scanTaskFunc,
@@ -650,6 +666,21 @@ void NFCManager::scanLoop() {
         esp_task_wdt_reset();
         MemoryDiagnostics::reportSelf(MemoryDiagnostics::Task::NFCScan);
 #endif
+        // Cooperative diagnostic pause. This is a safe boundary — no tag
+        // session or SPI transaction is in flight — so the self-test wizard
+        // can take exclusive ownership of the reader without a mid-transaction
+        // suspend. We keep feeding the watchdog while idle.
+        if (diagPauseRequested_) {
+            connection_->endTagSession();
+            scanPaused_ = true;
+            while (diagPauseRequested_) {
+#ifndef NATIVE_TEST
+                esp_task_wdt_reset();
+#endif
+                vTaskDelay(pdMS_TO_TICKS(20));
+            }
+            scanPaused_ = false;
+        }
         SCAN_PHASE(1);
         uint8_t uid[8];
         uint8_t uidLength = 0;

@@ -127,6 +127,34 @@ const char TROUBLESHOOTING_HTML[] PROGMEM = R"rawliteral(
 
     <button class="run-btn" id="runBtn" onclick="runChecks()">Run Checks</button>
 
+    <div class="selftest">
+      <h3 style="margin:28px 0 4px">Full Self-Test</h3>
+      <p style="color:var(--muted);font-size:13px;margin-bottom:12px">
+        Deeper, guided diagnostics with plain-language fixes and a sanitized report you can paste into a GitHub issue. Read-only — it never writes a tag or changes settings.
+      </p>
+      <label style="display:block;font-size:13px;margin:5px 0">
+        <input type="checkbox" id="stOptNetwork" checked> Network checks (WiFi / MQTT / Spoolman / printer)
+      </label>
+      <label style="display:block;font-size:13px;margin:5px 0">
+        <input type="checkbox" id="stOptStability" checked> NFC stability test <span style="color:var(--muted)">(place a tag on the reader when prompted)</span>
+      </label>
+      <button class="run-btn" id="stRunBtn" onclick="startSelfTest()">Run Self-Test</button>
+      <button class="copy-btn" id="stCancelBtn" style="display:none;margin-top:10px" onclick="cancelSelfTest()">Cancel</button>
+
+      <div id="stPrompt" style="display:none;margin-top:14px;padding:12px;border:1px solid var(--accent);border-radius:10px">
+        <div id="stPromptText" style="font-size:14px;margin-bottom:10px"></div>
+        <button class="run-btn" style="margin-top:0" onclick="selfTestContinue()">Continue</button>
+      </div>
+
+      <div id="stOverall" style="display:none;margin-top:14px;font-weight:700"></div>
+      <div class="check-list" id="stResults" style="margin-top:12px"></div>
+
+      <div id="stReportWrap" style="display:none;margin-top:14px">
+        <button class="copy-btn" onclick="copyReport()">Copy report for GitHub</button>
+        <pre id="stReport" style="white-space:pre-wrap;font-size:11px;background:rgba(0,0,0,.25);border-radius:8px;padding:10px;margin-top:8px;overflow-x:auto"></pre>
+      </div>
+    </div>
+
     <p style="margin-top:20px;font-size:13px;color:var(--muted)">
       Need more detail? <a href="/logs" style="color:var(--blue);font-weight:600">View Serial Log</a> for live scanner output.
     </p>
@@ -268,6 +296,110 @@ const char TROUBLESHOOTING_HTML[] PROGMEM = R"rawliteral(
       if (s < 60) return s + 's';
       if (s < 3600) return Math.floor(s/60) + 'm ' + (s%60) + 's';
       return Math.floor(s/3600) + 'h ' + Math.floor((s%3600)/60) + 'm';
+    }
+
+    // --- Full Self-Test wizard ---
+    var stPollTimer = null;
+
+    function stStatusClass(s) {
+      if (s === 'PASS') return 'pass';
+      if (s === 'FAIL') return 'fail';
+      if (s === 'WARN') return 'warn';
+      return '';
+    }
+    function stStatusIcon(s) {
+      return {PASS:'✓', FAIL:'✗', WARN:'⚠', SKIP:'—'}[s] || '⟳';
+    }
+    function esc(t) {
+      var d = document.createElement('div'); d.textContent = t == null ? '' : t; return d.innerHTML;
+    }
+
+    async function startSelfTest() {
+      var btn = document.getElementById('stRunBtn');
+      btn.disabled = true; btn.textContent = 'Running...';
+      document.getElementById('stCancelBtn').style.display = 'inline-block';
+      document.getElementById('stResults').innerHTML = '';
+      document.getElementById('stReportWrap').style.display = 'none';
+      document.getElementById('stOverall').style.display = 'none';
+      var body = {
+        network: document.getElementById('stOptNetwork').checked,
+        stability: document.getElementById('stOptStability').checked
+      };
+      try {
+        var r = await fetch('/api/diagnostics/session', {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify(body)
+        });
+        if (r.status === 409) { alert('A self-test is already running.'); }
+      } catch (e) {}
+      if (stPollTimer) clearInterval(stPollTimer);
+      stPollTimer = setInterval(pollSelfTest, 700);
+      pollSelfTest();
+    }
+
+    async function pollSelfTest() {
+      var s;
+      try { s = await (await fetch('/api/diagnostics/session')).json(); }
+      catch (e) { return; }
+
+      // Render results
+      var html = '';
+      (s.results || []).forEach(function(r) {
+        html += '<div class="check-item ' + stStatusClass(r.status) + '">' +
+                  '<div class="check-icon">' + stStatusIcon(r.status) + '</div>' +
+                  '<div class="check-body">' +
+                    '<div class="check-name">' + esc(r.test) + '</div>' +
+                    '<div class="check-detail">' + esc(r.summary) +
+                    (r.recommendation ? '<br><span style="color:var(--blue)">→ ' + esc(r.recommendation) + '</span>' : '') +
+                    '</div></div></div>';
+      });
+      document.getElementById('stResults').innerHTML = html;
+
+      // Waiting-for-user prompt
+      var prompt = document.getElementById('stPrompt');
+      if (s.waiting_for_user && s.prompt) {
+        document.getElementById('stPromptText').textContent = s.prompt;
+        prompt.style.display = 'block';
+      } else {
+        prompt.style.display = 'none';
+      }
+
+      if (!s.active) {
+        clearInterval(stPollTimer); stPollTimer = null;
+        var btn = document.getElementById('stRunBtn');
+        btn.disabled = false; btn.textContent = 'Run Self-Test Again';
+        document.getElementById('stCancelBtn').style.display = 'none';
+        var overall = document.getElementById('stOverall');
+        overall.style.display = 'block';
+        overall.textContent = 'Result: ' + s.overall +
+          (s.stability_ran ? '  •  NFC stability score ' + s.stability_score + '/100' : '');
+        loadReport();
+      }
+    }
+
+    async function selfTestContinue() {
+      document.getElementById('stPrompt').style.display = 'none';
+      try { await fetch('/api/diagnostics/session/input', {method: 'POST'}); } catch (e) {}
+    }
+
+    async function cancelSelfTest() {
+      try { await fetch('/api/diagnostics/session/cancel', {method: 'POST'}); } catch (e) {}
+    }
+
+    async function loadReport() {
+      try {
+        var txt = await (await fetch('/api/diagnostics/report')).text();
+        document.getElementById('stReport').textContent = txt;
+        document.getElementById('stReportWrap').style.display = 'block';
+      } catch (e) {}
+    }
+
+    function copyReport() {
+      var txt = document.getElementById('stReport').textContent;
+      navigator.clipboard.writeText(txt).then(function() {
+        var b = event.target; b.textContent = 'Copied!';
+        setTimeout(function(){ b.textContent = 'Copy report for GitHub'; }, 1500);
+      });
     }
 
     // Auto-run on page load

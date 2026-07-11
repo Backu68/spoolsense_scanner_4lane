@@ -85,6 +85,20 @@ public:
     void resumeScanTask();
     bool isWriteQueueEmpty() const;
 
+    // Cooperative diagnostic pause for the self-test wizard (#253). Unlike
+    // pauseScanTask()/vTaskSuspend, the scan task only stops at its safe loop
+    // boundary (no SPI transaction in flight), so the wizard can take exclusive
+    // ownership of the reader. Usage: requestScanPause(); waitForScanPaused();
+    // ... drive getDiagConnection() ...; resumeScan();
+    void requestScanPause() { diagPauseRequested_ = true; }
+    void resumeScan()       { diagPauseRequested_ = false; }
+    bool isScanPaused() const { return scanPaused_; }
+    // Block until the scan task acknowledges the pause. Returns false on timeout.
+    bool waitForScanPaused(uint32_t timeoutMs);
+    // Reader connection — only safe to drive directly while isScanPaused() is
+    // true; otherwise it races the scan loop on the SPI bus.
+    NFCConnectionI* getDiagConnection() { return connection_; }
+
     // Dependency injection for testing
     void setConnection(NFCConnectionI* conn) { connection_ = conn; }
     void resetWriteState() {
@@ -114,6 +128,10 @@ private:
     // Hardware connection (injected or created internally)
     NFCConnectionI* connection_ = nullptr;
     bool ownsConnection_ = false;
+
+    // Cooperative diagnostic pause handshake (self-test wizard, #253)
+    volatile bool diagPauseRequested_ = false;
+    volatile bool scanPaused_ = false;
 
     // Scan task
     static void scanTaskFunc(void* param);

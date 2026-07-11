@@ -214,6 +214,17 @@ void HardwareNFCConnectionPN532::getReaderInfo(char* buf, size_t len) const {
     }
 }
 
+bool HardwareNFCConnectionPN532::getDiagnosticSnapshot(ReaderDiagnostics& out) {
+    memset(&out, 0, sizeof(out));
+    getReaderInfo(out.reader_name, sizeof(out.reader_name));
+    out.initialized = ready_;
+    out.fw_major = fwMajor_;
+    out.fw_minor = fwMinor_;
+    out.has_registers = false;   // firmware-managed radio; no register interface
+    out.sam_config_ok = ready_;  // begin() sets ready_ only after SAMConfig() succeeds
+    return true;
+}
+
 void HardwareNFCConnectionPN532::logDiagnostics() {
     if (!pn532_ || !ready_) {
         Serial.println("PN532: Not initialized");

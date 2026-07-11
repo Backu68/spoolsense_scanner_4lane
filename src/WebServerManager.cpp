@@ -31,6 +31,7 @@
 #include "ConfigurationManager.h"
 #include "NFCManager.h"
 #include "U1Manager.h"
+#include "DiagnosticsManager.h"
 #include "NFCTypes.h"
 #include "NFCWriteTypes.h"
 #include "ApplicationManager.h"
@@ -131,6 +132,11 @@ bool WebServerManager::begin(bool apMode, uint16_t port) {
     _server.on("/api/config",          HTTP_POST, [this]() { handleApiPostConfig(); });
     _server.on("/api/status",          HTTP_GET,  [this]() { handleApiStatus(); });
     _server.on("/api/diagnostics",     HTTP_GET,  [this]() { handleApiDiagnostics(); });
+    _server.on("/api/diagnostics/session",        HTTP_POST, [this]() { handleApiSelfTestStart(); });
+    _server.on("/api/diagnostics/session",        HTTP_GET,  [this]() { handleApiSelfTestStatus(); });
+    _server.on("/api/diagnostics/session/input",  HTTP_POST, [this]() { handleApiSelfTestInput(); });
+    _server.on("/api/diagnostics/session/cancel", HTTP_POST, [this]() { handleApiSelfTestCancel(); });
+    _server.on("/api/diagnostics/report",         HTTP_GET,  [this]() { handleApiSelfTestReport(); });
     _server.on("/api/write-tag",       HTTP_POST, [this]() { handleApiWriteTag(); });
     _server.on("/api/format-tag",      HTTP_POST, [this]() { handleApiFormatTag(); });
     _server.on("/api/write-tigertag",  HTTP_POST, [this]() { handleApiWriteTigerTag(); });
@@ -658,6 +664,72 @@ void WebServerManager::handleApiSpoolmanPendingLink() {
     SpoolmanManager::getInstance().setPendingLink(spoolId);
     Serial.printf("WebServerManager: Pending link set for spool %d\n", spoolId);
     _server.send(200, "application/json", "{\"success\":true}");
+}
+
+// --- Self-test wizard (#253) ---------------------------------------------
+
+void WebServerManager::handleApiSelfTestStart() {
+    DiagnosticsManager::Options opts;  // defaults: network + stability on
+    if (_server.hasArg("plain")) {
+        StaticJsonDocument<128> body;
+        if (!deserializeJson(body, _server.arg("plain"))) {
+            if (body.containsKey("network"))   opts.network   = body["network"].as<bool>();
+            if (body.containsKey("stability")) opts.stability = body["stability"].as<bool>();
+        }
+    }
+    if (!DiagnosticsManager::getInstance().startSession(opts)) {
+        sendError(409, "A self-test is already running");
+        return;
+    }
+    _server.send(200, "application/json", "{\"started\":true}");
+}
+
+void WebServerManager::handleApiSelfTestStatus() {
+    DiagnosticsManager::Snapshot s;
+    DiagnosticsManager::getInstance().getSnapshot(s);
+
+    JsonDocument doc;
+    doc["active"] = s.active;
+    doc["overall"] = DiagnosticsManager::statusName(s.overall);
+    doc["waiting_for_user"] = s.waiting_for_user;
+    doc["prompt"] = s.stage_prompt;
+    doc["stability_ran"] = s.stability_ran;
+    doc["stability_score"] = s.stability_score;
+    JsonArray arr = doc["results"].to<JsonArray>();
+    for (uint8_t i = 0; i < s.result_count; i++) {
+        JsonObject o = arr.add<JsonObject>();
+        o["test"]           = DiagnosticsManager::testName(s.results[i].test);
+        o["status"]         = DiagnosticsManager::statusName(s.results[i].status);
+        o["summary"]        = s.results[i].summary;
+        o["recommendation"] = s.results[i].recommendation;
+        o["code"]           = s.results[i].code;
+        o["duration_ms"]    = s.results[i].duration_ms;
+    }
+    String out;
+    serializeJson(doc, out);
+    _server.send(200, "application/json", out);
+}
+
+void WebServerManager::handleApiSelfTestInput() {
+    DiagnosticsManager::getInstance().submitUserContinue();
+    _server.send(200, "application/json", "{\"ok\":true}");
+}
+
+void WebServerManager::handleApiSelfTestCancel() {
+    DiagnosticsManager::getInstance().cancelSession();
+    _server.send(200, "application/json", "{\"ok\":true}");
+}
+
+void WebServerManager::handleApiSelfTestReport() {
+    const size_t CAP = 4096;
+    char* buf = (char*)malloc(CAP);
+    if (!buf) {
+        sendError(500, "out of memory");
+        return;
+    }
+    DiagnosticsManager::getInstance().buildReport(buf, CAP);
+    _server.send(200, "text/plain", buf);
+    free(buf);
 }
 
 void WebServerManager::handleApiDiagnostics() {

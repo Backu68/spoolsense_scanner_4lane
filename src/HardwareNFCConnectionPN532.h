@@ -30,6 +30,7 @@ public:
     bool writeISO14443Pages(uint8_t startPage, uint8_t pageCount, const uint8_t* data, uint16_t dataLen) override;
     void getReaderInfo(char* buf, size_t len) const override;
     void logDiagnostics() override;
+    bool getDiagnosticSnapshot(ReaderDiagnostics& out) override;
 
 private:
     Adafruit_PN532* pn532_ = nullptr;
