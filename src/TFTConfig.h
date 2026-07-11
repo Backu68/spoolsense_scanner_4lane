@@ -17,7 +17,9 @@
 
 enum class TFTDriver : uint8_t {
     ST7789 = 0,
-    GC9A01 = 1
+    GC9A01 = 1,
+    ILI9341 = 2,   // 240x320 — dashboard centered with 40px letterbox
+    ILI9488 = 3    // 320x480 — dashboard centered
 };
 
 #if defined(BOARD_ESP32_S3)
@@ -25,6 +27,8 @@ enum class TFTDriver : uint8_t {
 class LGFX : public lgfx::LGFX_Device {
     lgfx::Panel_ST7789  _panel_st7789;
     lgfx::Panel_GC9A01  _panel_gc9a01;
+    lgfx::Panel_ILI9341 _panel_ili9341;
+    lgfx::Panel_ILI9488 _panel_ili9488;
     lgfx::Bus_SPI       _bus_instance;
     lgfx::Light_PWM     _light_instance;
 
@@ -52,6 +56,10 @@ public:
         lgfx::Panel_Device* panel = nullptr;
         if (driver == TFTDriver::GC9A01) {
             panel = &_panel_gc9a01;
+        } else if (driver == TFTDriver::ILI9341) {
+            panel = &_panel_ili9341;
+        } else if (driver == TFTDriver::ILI9488) {
+            panel = &_panel_ili9488;
         } else {
             panel = &_panel_st7789;
         }
@@ -63,17 +71,36 @@ public:
             cfg.pin_cs   = PIN_TFT_CS;
             cfg.pin_rst  = PIN_TFT_RST;
             cfg.pin_busy = -1;
-            cfg.memory_width  = 240;
-            cfg.memory_height = 240;
-            cfg.panel_width   = 240;
-            cfg.panel_height  = 240;
-            cfg.offset_x      = 0;
-            cfg.offset_y      = 0;
+            // The dashboard renders a 240x240 sprite; larger ILI94xx panels
+            // center it by offsetting the addressing window (#180)
+            if (driver == TFTDriver::ILI9341) {
+                cfg.memory_width  = 240;
+                cfg.memory_height = 320;
+                cfg.panel_width   = 240;
+                cfg.panel_height  = 240;
+                cfg.offset_x      = 0;
+                cfg.offset_y      = 40;
+            } else if (driver == TFTDriver::ILI9488) {
+                cfg.memory_width  = 320;
+                cfg.memory_height = 480;
+                cfg.panel_width   = 240;
+                cfg.panel_height  = 240;
+                cfg.offset_x      = 40;
+                cfg.offset_y      = 120;
+            } else {
+                cfg.memory_width  = 240;
+                cfg.memory_height = 240;
+                cfg.panel_width   = 240;
+                cfg.panel_height  = 240;
+                cfg.offset_x      = 0;
+                cfg.offset_y      = 0;
+            }
             cfg.offset_rotation = 0;
             cfg.dummy_read_pixel = 8;
             cfg.dummy_read_bits  = 1;
             cfg.readable     = false;
-            cfg.invert       = true;
+            cfg.invert       = (driver == TFTDriver::ILI9341 || driver == TFTDriver::ILI9488)
+                                   ? false : true;
             cfg.rgb_order    = false;
             cfg.dlen_16bit   = false;
             cfg.bus_shared   = false;
@@ -100,6 +127,8 @@ public:
 class LGFX : public lgfx::LGFX_Device {
     lgfx::Panel_ST7789  _panel_st7789;
     lgfx::Panel_GC9A01  _panel_gc9a01;
+    lgfx::Panel_ILI9341 _panel_ili9341;
+    lgfx::Panel_ILI9488 _panel_ili9488;
     lgfx::Bus_SPI       _bus_instance;
     lgfx::Light_PWM     _light_instance;
 
@@ -127,6 +156,10 @@ public:
         lgfx::Panel_Device* panel = nullptr;
         if (driver == TFTDriver::GC9A01) {
             panel = &_panel_gc9a01;
+        } else if (driver == TFTDriver::ILI9341) {
+            panel = &_panel_ili9341;
+        } else if (driver == TFTDriver::ILI9488) {
+            panel = &_panel_ili9488;
         } else {
             panel = &_panel_st7789;
         }
@@ -138,17 +171,36 @@ public:
             cfg.pin_cs   = PIN_TFT_CS;
             cfg.pin_rst  = PIN_TFT_RST;
             cfg.pin_busy = -1;
-            cfg.memory_width  = 240;
-            cfg.memory_height = 240;
-            cfg.panel_width   = 240;
-            cfg.panel_height  = 240;
-            cfg.offset_x      = 0;
-            cfg.offset_y      = 0;
+            // The dashboard renders a 240x240 sprite; larger ILI94xx panels
+            // center it by offsetting the addressing window (#180)
+            if (driver == TFTDriver::ILI9341) {
+                cfg.memory_width  = 240;
+                cfg.memory_height = 320;
+                cfg.panel_width   = 240;
+                cfg.panel_height  = 240;
+                cfg.offset_x      = 0;
+                cfg.offset_y      = 40;
+            } else if (driver == TFTDriver::ILI9488) {
+                cfg.memory_width  = 320;
+                cfg.memory_height = 480;
+                cfg.panel_width   = 240;
+                cfg.panel_height  = 240;
+                cfg.offset_x      = 40;
+                cfg.offset_y      = 120;
+            } else {
+                cfg.memory_width  = 240;
+                cfg.memory_height = 240;
+                cfg.panel_width   = 240;
+                cfg.panel_height  = 240;
+                cfg.offset_x      = 0;
+                cfg.offset_y      = 0;
+            }
             cfg.offset_rotation = 0;
             cfg.dummy_read_pixel = 8;
             cfg.dummy_read_bits  = 1;
             cfg.readable     = false;
-            cfg.invert       = true;
+            cfg.invert       = (driver == TFTDriver::ILI9341 || driver == TFTDriver::ILI9488)
+                                   ? false : true;
             cfg.rgb_order    = false;
             cfg.dlen_16bit   = false;
             cfg.bus_shared   = false;
