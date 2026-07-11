@@ -23,6 +23,10 @@ static constexpr int DIAG_TASK_CORE = 0;
 // Stability run tuning.
 static constexpr uint16_t STABILITY_DETECT_CYCLES = 100;
 static constexpr uint8_t  STABILITY_READ_EVERY = 5;   // do a page read every Nth cycle
+// Wall-clock cap: a good tag runs 100 cycles in ~5s, but each detect MISS
+// blocks on the reader's internal RF timeout (~1s), so a missing/marginal tag
+// would otherwise stretch to minutes. Bound the whole stage instead.
+static constexpr uint32_t STABILITY_MAX_MS = 8000;
 static constexpr uint32_t SCAN_PAUSE_TIMEOUT_MS = 3000;
 static constexpr uint32_t USER_WAIT_TIMEOUT_MS = 60000;
 
@@ -497,9 +501,14 @@ void DiagnosticsManager::runStabilityStage() {
     uint8_t readBuf[16];
 
     uint32_t t0 = millis();
-    for (uint16_t i = 0; i < STABILITY_DETECT_CYCLES && !cancelRequested_; i++) {
+    for (uint16_t i = 0; i < STABILITY_DETECT_CYCLES && !cancelRequested_
+                         && (millis() - t0) < STABILITY_MAX_MS; i++) {
         uint8_t uid[8] = {0};
         uint8_t len = 0;
+        // Mirror the scan loop's per-cycle RF preparation (its tag-present path
+        // does setupRF() before each detectTag) — without it, the field state is
+        // not re-armed after a read and subsequent detects mostly miss.
+        conn->setupRF();
         uint32_t d0 = millis();
         bool ok = conn->detectTag(uid, &len);
         uint32_t dt = millis() - d0;
@@ -521,7 +530,8 @@ void DiagnosticsManager::runStabilityStage() {
             if ((i % STABILITY_READ_EVERY) == 0) {
                 conn->setCurrentUid(uid, len);
                 m.read_attempts++;
-                uint16_t got = conn->readISO14443Pages(4, 4, readBuf, sizeof(readBuf), false);
+                // keepSession=true: don't halt the tag between cycles.
+                uint16_t got = conn->readISO14443Pages(4, 4, readBuf, sizeof(readBuf), true);
                 if (got > 0) m.read_success++;
             }
         }

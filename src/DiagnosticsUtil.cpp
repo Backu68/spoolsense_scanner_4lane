@@ -23,6 +23,11 @@ uint8_t diagComputeStabilityScore(const NfcStabilityMetrics& m) {
     if (m.detect_attempts == 0) {
         return 0;
     }
+    // No tag ever detected is the worst case — the detection weight alone can't
+    // express that, so floor it to 0 rather than 100-minus-one-weight.
+    if (m.detect_success == 0) {
+        return 0;
+    }
 
     uint32_t penalty = 0;
 

@@ -34,7 +34,7 @@ int main() {
     CHECK(diagComputeStabilityScore(none) == 0, "no attempts -> score 0");
 
     m = perfect(); m.detect_success = 0;  // every detection missed
-    CHECK(diagComputeStabilityScore(m) <= 60, "total detection loss craters score");
+    CHECK(diagComputeStabilityScore(m) == 0, "total detection loss scores 0");
 
     m = perfect(); m.detect_success = 90;  // 10% miss -> ~ -4
     s = diagComputeStabilityScore(m);
