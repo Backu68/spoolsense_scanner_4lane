@@ -150,7 +150,7 @@ const char TROUBLESHOOTING_HTML[] PROGMEM = R"rawliteral(
       <div class="check-list" id="stResults" style="margin-top:12px"></div>
 
       <div id="stReportWrap" style="display:none;margin-top:14px">
-        <button class="copy-btn" onclick="copyReport()">Copy report for GitHub</button>
+        <button class="copy-btn" id="stCopyBtn" onclick="copyReport()">Copy report for GitHub</button>
         <pre id="stReport" style="white-space:pre-wrap;font-size:11px;background:rgba(0,0,0,.25);border-radius:8px;padding:10px;margin-top:8px;overflow-x:auto"></pre>
       </div>
     </div>
@@ -186,12 +186,34 @@ const char TROUBLESHOOTING_HTML[] PROGMEM = R"rawliteral(
 
     function copyDeviceId() {
       const id = document.getElementById('deviceId').textContent;
-      if (id && id !== '—') {
-        navigator.clipboard.writeText(id).then(() => {
-          const btn = document.querySelector('.copy-btn');
-          btn.textContent = 'Copied!';
-          setTimeout(() => btn.textContent = 'Copy ID', 1500);
-        });
+      if (!id || id === '—') return;
+      const btn = document.querySelector('.copy-btn');
+      function flash(msg) {
+        if (!btn) return;
+        btn.textContent = msg;
+        setTimeout(function(){ btn.textContent = 'Copy ID'; }, 1500);
+      }
+      // Clipboard API is secure-context only; the scanner is plain HTTP, so
+      // fall back to a hidden textarea + execCommand.
+      function legacyCopy() {
+        try {
+          var ta = document.createElement('textarea');
+          ta.value = id;
+          ta.style.position = 'fixed';
+          ta.style.opacity = '0';
+          document.body.appendChild(ta);
+          ta.focus(); ta.select();
+          var ok = document.execCommand('copy');
+          document.body.removeChild(ta);
+          flash(ok ? 'Copied!' : 'Press ⌘C');
+        } catch (e) {
+          flash('Select + ⌘C');
+        }
+      }
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(id).then(function(){ flash('Copied!'); }, legacyCopy);
+      } else {
+        legacyCopy();
       }
     }
 
@@ -395,11 +417,35 @@ const char TROUBLESHOOTING_HTML[] PROGMEM = R"rawliteral(
     }
 
     function copyReport() {
-      var txt = document.getElementById('stReport').textContent;
-      navigator.clipboard.writeText(txt).then(function() {
-        var b = event.target; b.textContent = 'Copied!';
-        setTimeout(function(){ b.textContent = 'Copy report for GitHub'; }, 1500);
-      });
+      var pre = document.getElementById('stReport');
+      var btn = document.getElementById('stCopyBtn');
+      function flash(msg) {
+        if (!btn) return;
+        btn.textContent = msg;
+        setTimeout(function(){ btn.textContent = 'Copy report for GitHub'; }, 1800);
+      }
+      // Clipboard API needs a secure context (HTTPS/localhost); the scanner is
+      // served over plain HTTP, so fall back to selection + execCommand.
+      function legacyCopy() {
+        try {
+          var range = document.createRange();
+          range.selectNodeContents(pre);
+          var sel = window.getSelection();
+          sel.removeAllRanges();
+          sel.addRange(range);
+          var ok = document.execCommand('copy');
+          sel.removeAllRanges();
+          flash(ok ? 'Copied!' : 'Press ⌘C to copy');
+        } catch (e) {
+          flash('Select the text + ⌘C');
+        }
+      }
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(pre.textContent).then(
+          function(){ flash('Copied!'); }, legacyCopy);
+      } else {
+        legacyCopy();
+      }
     }
 
     // Auto-run on page load
