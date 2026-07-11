@@ -286,7 +286,7 @@ static NdefRecord findNdefMediaRecord(const uint8_t* pageData, uint16_t bytesRea
 // Read NDEF payload bytes, doing an extended page read if the initial 40-byte read
 // didn't contain the full payload. Returns bytes copied into outBuf.
 uint16_t NFCManager::readNdefPayload(const NdefRecord& rec, const uint8_t* pageData, uint16_t bytesRead,
-                                      uint8_t* outBuf, uint16_t outBufSize) {
+                                      uint8_t* outBuf, uint16_t outBufSize, uint16_t maxPages) {
     if (!rec.found || rec.payloadLen == 0) return 0;
 
     uint16_t available = (rec.payloadOffset < bytesRead) ? bytesRead - rec.payloadOffset : 0;
@@ -301,6 +301,15 @@ uint16_t NFCManager::readNdefPayload(const NdefRecord& rec, const uint8_t* pageD
     uint8_t startPage = 4 + (rec.payloadOffset / 4);
     uint16_t pagesNeeded = (uint16_t)((rec.payloadLen + 3) / 4) + 1;
     if (pagesNeeded > 50) pagesNeeded = 50;
+    // Never request past the tag's last usable page: NTAG READ rolls over to
+    // page 0 beyond the end, which would silently corrupt the tail of an
+    // over-asked payload (garbage payloadLen on a malformed tag)
+    if (maxPages > 0) {
+        if (startPage >= maxPages) return 0;
+        if ((uint16_t)startPage + pagesNeeded > maxPages) {
+            pagesNeeded = maxPages - startPage;
+        }
+    }
 
     uint8_t extBuf[256] = {0};
     uint16_t extRead = connection_->readISO14443Pages(startPage, (uint8_t)pagesNeeded, extBuf, sizeof(extBuf));
@@ -351,7 +360,8 @@ void NFCManager::readAndProcessISO14443Tag(const uint8_t* uid, uint8_t uidLength
             if (rec.mimeLen == strlen(ot3dMime) && memcmp(rec.mimeType, ot3dMime, rec.mimeLen) == 0) {
                 uint8_t payload[OT3D_EXTENDED_MIN];
                 SCAN_PHASE(22);
-                uint16_t payloadBytes = readNdefPayload(rec, pageData, bytesRead, payload, sizeof(payload));
+                uint16_t payloadBytes = readNdefPayload(rec, pageData, bytesRead, payload, sizeof(payload),
+                                                        ntagUsablePages(scan.variant));
                 if (payloadBytes >= OT3D_CORE_SIZE) {
                     opentag3d_result_t res = opentag3d_decode(payload, payloadBytes, &ot3dData);
                     if (res == OT3D_OK || res == OT3D_VERSION_WARNING) {
@@ -372,7 +382,8 @@ void NFCManager::readAndProcessISO14443Tag(const uint8_t* uid, uint8_t uidLength
                 if (rec.mimeLen == strlen(jsonMime) && memcmp(rec.mimeType, jsonMime, rec.mimeLen) == 0) {
                     uint8_t payload[256];
                     SCAN_PHASE(23);
-                    uint16_t payloadBytes = readNdefPayload(rec, pageData, bytesRead, payload, sizeof(payload));
+                    uint16_t payloadBytes = readNdefPayload(rec, pageData, bytesRead, payload, sizeof(payload),
+                                                            ntagUsablePages(scan.variant));
                     if (payloadBytes > 0 && parseOpenSpool(payload, payloadBytes, openSpoolData)) {
                         isOpenSpool = true;
                     }
