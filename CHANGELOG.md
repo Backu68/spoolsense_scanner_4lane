@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Improved
+
+- **PN532 tag reads are ~4× faster** — the reader was already receiving 16 bytes (4 pages) per radio exchange but keeping only 4; reads now harvest the full response, cutting round-trips 4× everywhere (classify read 10 → 3 exchanges, full OpenSpool payload 50 → 13, post-write verification the same). Most noticeable on single-core ESP32-C3 builds, where each library wait also stalls WiFi and the web UI. Radio traffic is unchanged — tags see the identical command sequence they always have. Extended payload reads are now also clamped to the tag variant's user memory, so a malformed payload length can no longer read lock/config pages into the payload tail. (#242)
+
 ## [1.8.1] - 2026-07-09
 
 ### Added
