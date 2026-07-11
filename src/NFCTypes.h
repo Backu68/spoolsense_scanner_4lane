@@ -32,6 +32,20 @@ inline uint16_t ntagUsablePages(NtagVariant v) {
     }
 }
 
+// Exclusive end of USER memory (first dynamic-lock/config page). Differs from
+// ntagUsablePages, which counts every page on the die — payload reads must
+// stop here or a malformed length pulls lock/config bytes into the payload.
+inline uint16_t ntagUserMemoryEnd(NtagVariant v) {
+    switch (v) {
+        case NtagVariant::NTAG213:          return 40;   // user 4-39
+        case NtagVariant::NTAG215:          return 130;  // user 4-129
+        case NtagVariant::NTAG216:          return 226;  // user 4-225
+        case NtagVariant::UltralightEV1_48: return 16;   // user 4-15
+        case NtagVariant::UltralightEV1_128:return 36;   // user 4-35
+        default:                            return 0;    // unknown — no clamp
+    }
+}
+
 inline const char* ntagVariantName(NtagVariant v) {
     switch (v) {
         case NtagVariant::NTAG213:          return "NTAG213";

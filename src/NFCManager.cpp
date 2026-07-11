@@ -361,7 +361,7 @@ void NFCManager::readAndProcessISO14443Tag(const uint8_t* uid, uint8_t uidLength
                 uint8_t payload[OT3D_EXTENDED_MIN];
                 SCAN_PHASE(22);
                 uint16_t payloadBytes = readNdefPayload(rec, pageData, bytesRead, payload, sizeof(payload),
-                                                        ntagUsablePages(scan.variant));
+                                                        ntagUserMemoryEnd(scan.variant));
                 if (payloadBytes >= OT3D_CORE_SIZE) {
                     opentag3d_result_t res = opentag3d_decode(payload, payloadBytes, &ot3dData);
                     if (res == OT3D_OK || res == OT3D_VERSION_WARNING) {
@@ -383,7 +383,7 @@ void NFCManager::readAndProcessISO14443Tag(const uint8_t* uid, uint8_t uidLength
                     uint8_t payload[256];
                     SCAN_PHASE(23);
                     uint16_t payloadBytes = readNdefPayload(rec, pageData, bytesRead, payload, sizeof(payload),
-                                                            ntagUsablePages(scan.variant));
+                                                            ntagUserMemoryEnd(scan.variant));
                     if (payloadBytes > 0 && parseOpenSpool(payload, payloadBytes, openSpoolData)) {
                         isOpenSpool = true;
                     }
