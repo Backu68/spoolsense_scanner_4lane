@@ -93,10 +93,10 @@ public:
             } else if (driver == TFTDriver::ILI9488) {
                 cfg.memory_width  = 320;
                 cfg.memory_height = 480;
-                cfg.panel_width   = 240;
-                cfg.panel_height  = 240;
-                cfg.offset_x      = 40;
-                cfg.offset_y      = 120;
+                cfg.panel_width   = 320;   // full native panel (landscape via rotation)
+                cfg.panel_height  = 480;
+                cfg.offset_x      = 0;
+                cfg.offset_y      = 0;
             } else {
                 cfg.memory_width  = 240;
                 cfg.memory_height = 240;
@@ -105,7 +105,9 @@ public:
                 cfg.offset_x      = 0;
                 cfg.offset_y      = 0;
             }
-            cfg.offset_rotation = 0;
+            // ILI9488 3.5" modules ship X-mirrored vs the ST7789 default and are
+            // mounted landscape; rotation 5 = 90° + horizontal mirror-correct.
+            cfg.offset_rotation = (driver == TFTDriver::ILI9488) ? 5 : 0;
             cfg.dummy_read_pixel = 8;
             cfg.dummy_read_bits  = 1;
             cfg.readable     = false;
@@ -203,10 +205,10 @@ public:
             } else if (driver == TFTDriver::ILI9488) {
                 cfg.memory_width  = 320;
                 cfg.memory_height = 480;
-                cfg.panel_width   = 240;
-                cfg.panel_height  = 240;
-                cfg.offset_x      = 40;
-                cfg.offset_y      = 120;
+                cfg.panel_width   = 320;   // full native panel (landscape via rotation)
+                cfg.panel_height  = 480;
+                cfg.offset_x      = 0;
+                cfg.offset_y      = 0;
             } else {
                 cfg.memory_width  = 240;
                 cfg.memory_height = 240;
@@ -215,7 +217,9 @@ public:
                 cfg.offset_x      = 0;
                 cfg.offset_y      = 0;
             }
-            cfg.offset_rotation = 0;
+            // ILI9488 3.5" modules ship X-mirrored vs the ST7789 default and are
+            // mounted landscape; rotation 5 = 90° + horizontal mirror-correct.
+            cfg.offset_rotation = (driver == TFTDriver::ILI9488) ? 5 : 0;
             cfg.dummy_read_pixel = 8;
             cfg.dummy_read_bits  = 1;
             cfg.readable     = false;
