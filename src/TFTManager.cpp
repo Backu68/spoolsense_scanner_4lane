@@ -78,17 +78,17 @@ void TFTManager::begin() {
     // 16-bit color needs PSRAM on S3-DevKitC: 240x240x2 bytes = 115KB, internal RAM only ~50KB free
     _sprite.setPsram(true);
     _sprite.setColorDepth(16);
-    if (!_sprite.createSprite(_tft.width(), _tft.height())) {
+    if (!_sprite.createSprite(240, 240)) {
         Serial.println("TFTManager: PSRAM sprite failed, falling back to 8-bit internal RAM");
         _sprite.setPsram(false);
         _sprite.setColorDepth(8);  // 8-bit indexed color fits in internal RAM; reduced colors
-        if (!_sprite.createSprite(_tft.width(), _tft.height())) {
+        if (!_sprite.createSprite(240, 240)) {
             Serial.println("TFTManager: WARNING — sprite allocation failed");
         }
     }
 #else
     _sprite.setColorDepth(8);
-    if (!_sprite.createSprite(_tft.width(), _tft.height())) {
+    if (!_sprite.createSprite(240, 240)) {
         Serial.println("TFTManager: WARNING — sprite allocation failed");
     }
 #endif
@@ -379,11 +379,11 @@ void TFTManager::renderBoot(const char* version) {
     _sprite.setTextColor(COLOR_ACCENT);
     _sprite.setTextSize(3);
     _sprite.setTextDatum(MC_DATUM);
-    _sprite.drawString("SpoolSense", _tft.width() / 2, _tft.height() / 2 - 20);
+    _sprite.drawString("SpoolSense", _sprite.width() / 2, _sprite.height() / 2 - 20);
 
     _sprite.setTextColor(COLOR_SUBTEXT);
     _sprite.setTextSize(1);
-    _sprite.drawString(version, _tft.width() / 2, _tft.height() / 2 + 20);
+    _sprite.drawString(version, _sprite.width() / 2, _sprite.height() / 2 + 20);
 
     blitCanvas();
 }
@@ -392,22 +392,22 @@ void TFTManager::renderReady() {
     _sprite.fillScreen(COLOR_BG);
 
     // Header bar
-    _sprite.fillRect(0, 0, _tft.width(), 28, COLOR_HEADER_BG);
+    _sprite.fillRect(0, 0, _sprite.width(), 28, COLOR_HEADER_BG);
     _sprite.setTextColor(COLOR_ACCENT);
     _sprite.setTextSize(1);
     _sprite.setTextDatum(MC_DATUM);
-    _sprite.drawString("SpoolSense", _tft.width() / 2, 14);
+    _sprite.drawString("SpoolSense", _sprite.width() / 2, 14);
 
     // Idle spool graphic: grey fill indicates no spool selected (waiting for tag)
-    int cx = _tft.width() / 2;
-    int cy = _tft.height() / 2 + 10;
+    int cx = _sprite.width() / 2;
+    int cy = _sprite.height() / 2 + 10;
     drawSpool(cx, cy, 70, 28, COLOR_SPOOL_RIM);  // grey color = idle state
 
     // Prompt
     _sprite.setTextColor(COLOR_SUBTEXT);
     _sprite.setTextSize(1);
     _sprite.setTextDatum(MC_DATUM);
-    _sprite.drawString("Tap a spool to scan", cx, _tft.height() - 16);
+    _sprite.drawString("Tap a spool to scan", cx, _sprite.height() - 16);
 
     blitCanvas();
 }
@@ -415,8 +415,8 @@ void TFTManager::renderReady() {
 void TFTManager::renderSpoolScanned(const DisplaySpoolData& spool) {
     _sprite.fillScreen(COLOR_BG);
 
-    int W = _tft.width();   // 240
-    int H = _tft.height();  // 240
+    int W = _sprite.width();   // 240
+    int H = _sprite.height();  // 240
 
     // Header bar
     _sprite.fillRect(0, 0, W, 28, COLOR_HEADER_BG);
@@ -428,7 +428,7 @@ void TFTManager::renderSpoolScanned(const DisplaySpoolData& spool) {
     _sprite.setTextColor(COLOR_ACCENT);
     _sprite.setTextSize(1);
     _sprite.setTextDatum(MC_DATUM);
-    _sprite.drawString("SpoolSense", _tft.width() / 2, 14);
+    _sprite.drawString("SpoolSense", _sprite.width() / 2, 14);
 
     // ---- Spool graphic ----
     uint32_t fillColor = hexToRgb(spool.colorHex);
@@ -558,22 +558,22 @@ void TFTManager::renderSpoolScannedLandscape(const DisplaySpoolData& spool) {
 void TFTManager::renderStatus(const char* line1, const char* line2) {
     _sprite.fillScreen(COLOR_BG);
 
-    _sprite.fillRect(0, 0, _tft.width(), 28, COLOR_HEADER_BG);
+    _sprite.fillRect(0, 0, _sprite.width(), 28, COLOR_HEADER_BG);
     _sprite.setTextColor(COLOR_ACCENT);
     _sprite.setTextSize(1);
     _sprite.setTextDatum(MC_DATUM);
-    _sprite.drawString("SpoolSense", _tft.width() / 2, 14);
+    _sprite.drawString("SpoolSense", _sprite.width() / 2, 14);
 
-    int cy = _tft.height() / 2;
+    int cy = _sprite.height() / 2;
     _sprite.setTextColor(COLOR_TEXT);
     _sprite.setTextSize(2);
     _sprite.setTextDatum(MC_DATUM);
-    _sprite.drawString(line1, _tft.width() / 2, line2 ? cy - 12 : cy);
+    _sprite.drawString(line1, _sprite.width() / 2, line2 ? cy - 12 : cy);
 
     if (line2) {
         _sprite.setTextColor(COLOR_SUBTEXT);
         _sprite.setTextSize(1);
-        _sprite.drawString(line2, _tft.width() / 2, cy + 12);
+        _sprite.drawString(line2, _sprite.width() / 2, cy + 12);
     }
 
     blitCanvas();
@@ -581,14 +581,14 @@ void TFTManager::renderStatus(const char* line1, const char* line2) {
 
 void TFTManager::renderWriteResult(bool success, const char* tagFormat) {
     _sprite.fillScreen(COLOR_BG);
-    _sprite.fillRect(0, 0, _tft.width(), 28, COLOR_HEADER_BG);
+    _sprite.fillRect(0, 0, _sprite.width(), 28, COLOR_HEADER_BG);
     _sprite.setTextColor(COLOR_ACCENT);
     _sprite.setTextSize(1);
     _sprite.setTextDatum(MC_DATUM);
-    _sprite.drawString("SpoolSense", _tft.width() / 2, 14);
+    _sprite.drawString("SpoolSense", _sprite.width() / 2, 14);
 
-    int cx = _tft.width() / 2;
-    int cy = _tft.height() / 2;
+    int cx = _sprite.width() / 2;
+    int cy = _sprite.height() / 2;
 
     if (success) {
         // Green checkmark circle
@@ -620,13 +620,13 @@ void TFTManager::renderWriteResult(bool success, const char* tagFormat) {
 
 void TFTManager::renderKeypadEntry(const char* toolNumber) {
     _sprite.fillScreen(COLOR_BG);
-    _sprite.fillRect(0, 0, _tft.width(), 28, COLOR_HEADER_BG);
+    _sprite.fillRect(0, 0, _sprite.width(), 28, COLOR_HEADER_BG);
     _sprite.setTextColor(COLOR_ACCENT);
     _sprite.setTextSize(1);
     _sprite.setTextDatum(MC_DATUM);
-    _sprite.drawString("SpoolSense", _tft.width() / 2, 14);
+    _sprite.drawString("SpoolSense", _sprite.width() / 2, 14);
 
-    int cx = _tft.width() / 2;
+    int cx = _sprite.width() / 2;
     _sprite.setTextColor(COLOR_SUBTEXT);
     _sprite.setTextSize(1);
     _sprite.drawString("Assign to tool:", cx, 100);
