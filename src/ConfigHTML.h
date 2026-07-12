@@ -272,6 +272,8 @@ const char CONFIG_HTML[] PROGMEM = R"rawliteral(
                 <select id="tft_driver" aria-labelledby="tft_driver_label" style="padding:6px 10px;border-radius:6px;border:1px solid var(--border);background:var(--card);color:var(--text);font-size:0.95em">
                   <option value="st7789">ST7789 (square)</option>
                   <option value="gc9a01">GC9A01 (round)</option>
+                  <option value="ili9341">ILI9341 (240&times;320)</option>
+                  <option value="ili9488">ILI9488 (320&times;480)</option>
                 </select>
               </div>
             </div>

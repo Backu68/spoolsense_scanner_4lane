@@ -8,7 +8,7 @@ OPT_OBJS = openprinttag_lib.o cbor_native.o
 
 .PHONY: all clean test
 
-all: test_printer_manager
+all: test_printer_manager test_opt_ndef_bounds
 
 openprinttag_lib.o: ../../lib/openprinttag/openprinttag_lib.c
 	$(CC) $(CFLAGS) -c -o $@ $<
@@ -19,11 +19,17 @@ cbor_native.o: ../../lib/openprinttag/cbor_native.c
 test_printer_manager: test_printer_manager.cpp native_stubs.cpp MockPrinterStrategy.h test_helpers.h ../../src/IPrinterStrategy.h $(OPT_OBJS)
 	$(CXX) $(CXXFLAGS) -o $@ test_printer_manager.cpp native_stubs.cpp $(OPT_OBJS)
 
-test: test_printer_manager
+test_opt_ndef_bounds: test_opt_ndef_bounds.c $(OPT_OBJS)
+	$(CC) $(CFLAGS) -o $@ test_opt_ndef_bounds.c $(OPT_OBJS)
+
+test: test_printer_manager test_opt_ndef_bounds
 	@echo ""
 	@echo "=== Running PrinterManager tests ==="
 	@./test_printer_manager
 	@echo ""
+	@echo "=== Running openprinttag NDEF bounds tests ==="
+	@./test_opt_ndef_bounds
+	@echo ""
 
 clean:
-	rm -f test_printer_manager *.o
+	rm -f test_printer_manager test_opt_ndef_bounds *.o

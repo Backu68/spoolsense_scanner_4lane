@@ -474,6 +474,15 @@ bool PN5180::setRF_on() {
   {
     unsigned long t = millis();
     while (0 == (TX_RFON_IRQ_STAT & getIRQStatus())) { // wait for RF field to set up
+      // TX_RFON is a TRANSITION interrupt — commanding RF on while the field
+      // is already energized produces no edge and no IRQ. Check the live
+      // field state before calling it a failure: an already-on field is
+      // success (this fired as a false "TIMEOUT TX_RFON_IRQ" on every idle
+      // scan cycle once the timeout logs became always-on).
+      uint32_t rfStatus = 0;
+      if (readRegister(RF_STATUS, &rfStatus) && (rfStatus & (1UL << 20))) {
+        return true;  // TX_RF_STATUS: field is on
+      }
       if (millis() - t > 500) {
         Serial.println("PN5180: TIMEOUT TX_RFON_IRQ");
         return false;
@@ -502,6 +511,11 @@ bool PN5180::setRF_off() {
   {
     unsigned long t = millis();
     while (0 == (TX_RFOFF_IRQ_STAT & getIRQStatus())) { // wait for RF field to shut down
+      // Mirror of setRF_on: no edge when the field was already off
+      uint32_t rfStatus = 0;
+      if (readRegister(RF_STATUS, &rfStatus) && !(rfStatus & (1UL << 20))) {
+        return true;  // field is off
+      }
       if (millis() - t > 500) {
         Serial.println("PN5180: TIMEOUT TX_RFOFF_IRQ");
         return false;

@@ -1,5 +1,22 @@
 # Changelog
 
+## [Unreleased]
+
+### Security
+
+- **NDEF parser rejects payloads larger than the data actually read** — a truncated read or hostile tag could declare up to a 64KB payload against a 44-byte buffer, and the region parsers inherited an end pointer far past the allocation (out-of-bounds reads, ASan-verified). The declared payload must now fit the held data; a native regression suite guards it. (#239)
+
+### Added
+
+- **ILI9341 and ILI9488 TFT support** — both ILI94xx panels join the TFT driver dropdown. The 240×240 dashboard renders centered on the larger panels. (#180)
+- **Release assets ship `.sha256` checksums** — the installer already verifies downloads against sidecar checksums and fails closed; scanner releases now publish them, so a corrupted download gets caught before it flashes instead of boot-looping the board. (#227)
+- **Integration bench runner** — `test/integration/run_bench.sh` packages the mock-PrusaLink scenarios (full print, cancel proration, filament mismatch, XL multi-tool) into a one-command hardware-in-the-loop bench suite with documented prerequisites. (#225)
+
+### Fixed
+
+- **ISO14443 block reads flagged by the receiver are discarded** — a read the PN5180 itself marked with a general error could previously hand corrupted bytes to the tag parsers if the length looked right. (#111)
+- **OpenTag3D density field documented at its real scale** — the `_ugcm3` suffix is misleading (on-tag scale is mg/cm³); the authoritative header now says so, after a stale doc snippet caused a 1000× density bug in a port. (#236)
+
 ## [1.8.2] - 2026-07-10
 
 ### Improved
