@@ -5,6 +5,7 @@ serial.log
 # test build artifacts (sources are tracked)
 test/native/*.o
 test/native/test_printer_manager
+test/native/test_opt_ndef_bounds
 test/native/*.dSYM/
 test/build/
 tools/

@@ -36,6 +36,10 @@ public:
     bool isPN5180Ready() const { return pn5180Ready_; }
 
 private:
+    // Effective NFC pins, captured once from ConfigurationManager at begin()
+    // — runtime overrides (#201) apply on the post-save reboot
+    uint8_t pinRst_ = 0, pinNss_ = 0, pinBusy_ = 0;
+    uint8_t pinSck_ = 0, pinMosi_ = 0, pinMiso_ = 0;
     PN5180ISO15693* nfc_ = nullptr;
     PN5180ISO14443* iso14443a_ = nullptr;
     opt_nfc_hal_t hal_;

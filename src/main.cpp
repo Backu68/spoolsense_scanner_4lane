@@ -267,10 +267,14 @@ void setup() {
   }
 
   if (config.isTftEnabled()) {
-    // TFT display: runtime driver selection (st7789 or gc9a01) from NVS
+    // TFT display: runtime driver selection from NVS
     TFTDriver tftDriver = TFTDriver::ST7789;
     if (strcmp(config.getTftDriver(), "gc9a01") == 0) {
         tftDriver = TFTDriver::GC9A01;
+    } else if (strcmp(config.getTftDriver(), "ili9341") == 0) {
+        tftDriver = TFTDriver::ILI9341;
+    } else if (strcmp(config.getTftDriver(), "ili9488") == 0) {
+        tftDriver = TFTDriver::ILI9488;
     }
     tftManagerPtr = new TFTManager(tftDriver);
     tftManagerPtr->begin();

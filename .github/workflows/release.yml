@@ -54,6 +54,11 @@ jobs:
           cp .pio/build/esp32s3zero/partitions.bin release/partitions_esp32s3zero.bin
           cp .pio/build/esp32s3devkitc/partitions.bin release/partitions_esp32s3devkitc.bin
           cp .pio/build/esp32c3/partitions.bin release/partitions_esp32c3.bin
+          # Integrity sidecars — the installer (v1.4.0+) verifies downloads
+          # against these and fails closed on mismatch (#227)
+          cd release
+          for f in *.bin; do sha256sum "$f" > "$f.sha256"; done
+          cd ..
           cp partitions.csv release/partitions.csv
 
       - name: Extract changelog for this version
@@ -89,6 +94,7 @@ jobs:
             release/partitions_esp32s3zero.bin
             release/partitions_esp32s3devkitc.bin
             release/partitions_esp32c3.bin
+            release/*.sha256
             release/partitions.csv
 
       - name: Trigger web flasher update

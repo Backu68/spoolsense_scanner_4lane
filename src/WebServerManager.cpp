@@ -807,6 +807,20 @@ void WebServerManager::handleApiGetConfig() {
     }
     doc["tft_enabled"] = cfg.tft_enabled;
     doc["tft_driver"] = cfg.tft_driver;
+    {
+        // NFC pin overrides (#201): "" = board default; *_default carries the
+        // effective default so the page can show it as the placeholder
+        static const char* keys[6] = {"pin_nfc_rst","pin_nfc_nss","pin_nfc_busy",
+                                      "pin_nfc_sck","pin_nfc_mosi","pin_nfc_miso"};
+        auto& cm = ConfigurationManager::getInstance();
+        for (int i = 0; i < 6; i++) {
+            char defKey[24];
+            snprintf(defKey, sizeof(defKey), "%s_default", keys[i]);
+            if (cfg.nfc_pins[i] == LED_PIN_DEFAULT) doc[keys[i]] = "";
+            else doc[keys[i]] = cfg.nfc_pins[i];
+            doc[defKey] = cm.getNfcPin((NfcPinId)i);
+        }
+    }
     doc["ap_mode"] = _apMode;
     if (_apMode) {
         extern char g_apSSID[];
@@ -884,6 +898,22 @@ void WebServerManager::handleApiPostConfig() {
             long p = strtol(ledPinStr, &end, 10);
             bool numeric = (end != ledPinStr) && (*end == '\0');
             update.led_pin = (numeric && p >= 0 && p <= 254) ? (uint8_t)p : LED_PIN_DEFAULT;
+        }
+    }
+    {
+        // NFC pin overrides (#201): same string convention as led_pin
+        static const char* keys[6] = {"pin_nfc_rst","pin_nfc_nss","pin_nfc_busy",
+                                      "pin_nfc_sck","pin_nfc_mosi","pin_nfc_miso"};
+        for (int i = 0; i < 6; i++) {
+            const char* s = doc[keys[i]] | "";
+            if (s[0] == '\0') {
+                update.nfc_pins[i] = LED_PIN_DEFAULT;
+                continue;
+            }
+            char* end = nullptr;
+            long p = strtol(s, &end, 10);
+            bool numeric = (end != s) && (*end == '\0');
+            update.nfc_pins[i] = (numeric && p >= 0 && p <= 254) ? (uint8_t)p : LED_PIN_DEFAULT;
         }
     }
 
