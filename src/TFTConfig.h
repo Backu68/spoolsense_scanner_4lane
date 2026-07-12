@@ -47,7 +47,17 @@ public:
             cfg.freq_read  = 16000000;
             cfg.pin_sclk   = PIN_TFT_SCLK;
             cfg.pin_mosi   = PIN_TFT_MOSI;
+#if defined(BOARD_SHARED_SPI)
+            // On single-GP-SPI boards LovyanGFX performs the one and only
+            // Arduino SPI.begin() for the whole bus, and Arduino's
+            // SPIClass::begin() ignores a second begin() once the bus is
+            // started. The shared bus must therefore come up with the
+            // PN5180/PN532 MISO routed here — the write-only TFT never reads
+            // it, but NFC cannot read tag responses without it.
+            cfg.pin_miso   = PIN_PN5180_MISO;
+#else
             cfg.pin_miso   = PIN_TFT_MISO;
+#endif
             cfg.pin_dc     = PIN_TFT_DC;
             _bus_instance.config(cfg);
         }
@@ -134,12 +144,12 @@ class LGFX : public lgfx::LGFX_Device {
 
 public:
     LGFX(TFTDriver driver = TFTDriver::ST7789) {
-        // SPI bus — WROOM uses VSPI (PN5180 on HSPI). C3 has no VSPI; TFT is
-        // out of scope for C3 builds but LGFX must still link, so fall back to SPI2.
+        // SPI bus — WROOM uses VSPI (PN5180 on HSPI). Capability-enabled
+        // single-SPI boards share SPI2 with NFC; disabled targets do not link LGFX.
         {
             auto cfg = _bus_instance.config();
 #if defined(BOARD_ESP32_C3) || defined(BOARD_ESP32_C5) || defined(BOARD_ESP32_C6)
-            cfg.spi_host   = SPI2_HOST;  // Single-SPI targets: TFT is unsupported at runtime
+            cfg.spi_host   = SPI2_HOST;
 #else
             cfg.spi_host   = VSPI_HOST;
 #endif
@@ -148,7 +158,17 @@ public:
             cfg.freq_read  = 16000000;
             cfg.pin_sclk   = PIN_TFT_SCLK;
             cfg.pin_mosi   = PIN_TFT_MOSI;
+#if defined(BOARD_SHARED_SPI)
+            // On single-GP-SPI boards LovyanGFX performs the one and only
+            // Arduino SPI.begin() for the whole bus, and Arduino's
+            // SPIClass::begin() ignores a second begin() once the bus is
+            // started. The shared bus must therefore come up with the
+            // PN5180/PN532 MISO routed here — the write-only TFT never reads
+            // it, but NFC cannot read tag responses without it.
+            cfg.pin_miso   = PIN_PN5180_MISO;
+#else
             cfg.pin_miso   = PIN_TFT_MISO;
+#endif
             cfg.pin_dc     = PIN_TFT_DC;
             _bus_instance.config(cfg);
         }
@@ -203,7 +223,11 @@ public:
                                    ? false : true;
             cfg.rgb_order    = false;
             cfg.dlen_16bit   = false;
+#if defined(BOARD_SHARED_SPI)
+            cfg.bus_shared   = true;
+#else
             cfg.bus_shared   = false;
+#endif
             panel->config(cfg);
         }
 

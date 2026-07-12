@@ -1,6 +1,7 @@
 #include "TFTManager.h"
 #include "ConfigurationManager.h"
 #include "MemoryDiagnostics.h"
+#include "SharedSPIBus.h"
 #include "TaskUtils.h"
 #include <Arduino.h>
 
@@ -44,7 +45,25 @@ TFTManager::TFTManager(TFTDriver driver)
 // begin / startTask
 // ---------------------------------------------------------------------------
 void TFTManager::begin() {
+#if defined(BOARD_SHARED_SPI)
+    const int16_t nfcCs = ConfigurationManager::getInstance().getNfcPin(NfcPinId::Nss);
+    if (!SharedSPIBus::prepareChipSelects(nfcCs, PIN_TFT_CS)) {
+        Serial.println("TFTManager: shared SPI chip-select setup failed");
+        return;
+    }
+#endif
+    SharedSPIBus::Guard busGuard;
+    if (!busGuard) {
+        Serial.println("TFTManager: shared SPI init lock timed out");
+        return;
+    }
     _tft.init();
+#if defined(BOARD_SHARED_SPI)
+    if (!SharedSPIBus::adoptInitializedBus(nfcCs, PIN_TFT_CS)) {
+        Serial.println("TFTManager: shared SPI ownership setup failed");
+        return;
+    }
+#endif
     delay(100);  // panel initialization delay
     _tft.setRotation(0);
     _tft.setBrightness(255);
@@ -74,9 +93,16 @@ void TFTManager::begin() {
         Serial.println("TFTManager: WARNING — queue creation failed");
     }
     _lastActivityMs = millis();  // initialize timeout clock
+    _began = true;
 }
 
 void TFTManager::startTask() {
+    if (!_began) {
+        // begin() bailed (e.g. shared-SPI bus setup failed) — do not spin up a
+        // render task that would drive an uninitialized panel.
+        Serial.println("TFTManager: not initialized; render task not started");
+        return;
+    }
     // 8192 bytes: TFT drawing operations + sprite manipulation use more stack than simple
     // I2C LCD operations; sprite creation/pushSprite are stack-heavy due to local buffers
     BaseType_t result = createTaskWithAffinity(
@@ -210,7 +236,12 @@ void TFTManager::setScreenTimeoutMs(uint32_t timeoutMs) {
     _screenOff = false;
     taskEXIT_CRITICAL(&_stateMux);
     if (wasOff) {
-        _tft.setBrightness(255);  // wake screen immediately
+        SharedSPIBus::Guard busGuard;
+        if (busGuard) {
+            _tft.setBrightness(255);  // wake screen immediately
+        } else {
+            Serial.println("TFTManager: shared SPI wake lock timed out");
+        }
     }
 }
 
@@ -241,46 +272,51 @@ void TFTManager::processQueue() {
         _isBreathing = false;  // stop any prior breathing when new message arrives
         taskEXIT_CRITICAL(&_stateMux);
 
-        if (wasOff) {
-            _tft.setBrightness(255);
-        }
+        SharedSPIBus::Guard busGuard;
+        if (!busGuard) {
+            Serial.println("TFTManager: shared SPI render lock timed out; frame dropped");
+        } else {
+            if (wasOff) {
+                _tft.setBrightness(255);
+            }
 
-        switch (msg.state) {
-            case TFTState::Boot:
-                renderBoot(msg.statusText);
-                break;
-            case TFTState::WifiConnecting:
-                renderStatus(msg.statusText, msg.statusText2[0] ? msg.statusText2 : nullptr);
-                break;
-            case TFTState::Ready:
-                renderReady();
-                break;
-            case TFTState::SpoolScanned:
-                // Breathing animation for low-weight spools (< 100g): visual cue for respool
-                _isBreathing = (msg.spool.remainingWeight > 0 &&
-                                msg.spool.remainingWeight <= (float)ConfigurationManager::getInstance().getLowSpoolThreshold());
-                if (_isBreathing) {
-                    _breathColor = hexToRgb(msg.spool.colorHex);
-                    _breathBrightness = 255;
-                    _breathDirection = -1;  // start dimming
-                }
-                renderSpoolScanned(msg.spool);
-                break;
-            case TFTState::Writing:
-                renderStatus("Writing...", msg.statusText);
-                break;
-            case TFTState::WriteResult:
-                renderWriteResult(msg.writeSuccess, msg.statusText);
-                break;
-            case TFTState::KeypadEntry:
-                renderKeypadEntry(msg.statusText);
-                break;
-            case TFTState::Error:
-                renderStatus("Error", msg.statusText);
-                break;
-            case TFTState::TrayDashboard:
-                _dashboard.render(&_sprite, msg.dashboardState);
-                break;
+            switch (msg.state) {
+                case TFTState::Boot:
+                    renderBoot(msg.statusText);
+                    break;
+                case TFTState::WifiConnecting:
+                    renderStatus(msg.statusText, msg.statusText2[0] ? msg.statusText2 : nullptr);
+                    break;
+                case TFTState::Ready:
+                    renderReady();
+                    break;
+                case TFTState::SpoolScanned:
+                    // Breathing animation for low-weight spools (< 100g): visual cue for respool
+                    _isBreathing = (msg.spool.remainingWeight > 0 &&
+                                    msg.spool.remainingWeight <= (float)ConfigurationManager::getInstance().getLowSpoolThreshold());
+                    if (_isBreathing) {
+                        _breathColor = hexToRgb(msg.spool.colorHex);
+                        _breathBrightness = 255;
+                        _breathDirection = -1;  // start dimming
+                    }
+                    renderSpoolScanned(msg.spool);
+                    break;
+                case TFTState::Writing:
+                    renderStatus("Writing...", msg.statusText);
+                    break;
+                case TFTState::WriteResult:
+                    renderWriteResult(msg.writeSuccess, msg.statusText);
+                    break;
+                case TFTState::KeypadEntry:
+                    renderKeypadEntry(msg.statusText);
+                    break;
+                case TFTState::Error:
+                    renderStatus("Error", msg.statusText);
+                    break;
+                case TFTState::TrayDashboard:
+                    _dashboard.render(&_sprite, msg.dashboardState);
+                    break;
+            }
         }
     }
 
@@ -292,7 +328,8 @@ void TFTManager::processQueue() {
         if (next <= 30)  { next = 30;  _breathDirection = 1; }
         if (next >= 255) { next = 255; _breathDirection = -1; }
         _breathBrightness = (uint8_t)next;
-        _tft.setBrightness(_breathBrightness);
+        SharedSPIBus::Guard busGuard;
+        if (busGuard) _tft.setBrightness(_breathBrightness);
     }
 
     // Screen timeout: turn off after inactivity period if configured (timeoutMs > 0)
@@ -306,10 +343,13 @@ void TFTManager::processQueue() {
     taskEXIT_CRITICAL(&_stateMux);
 
     if (!screenOff && timeoutMs > 0 && (millis() - lastActivity >= timeoutMs)) {
-        _tft.setBrightness(0);
-        taskENTER_CRITICAL(&_stateMux);
-        _screenOff = true;
-        taskEXIT_CRITICAL(&_stateMux);
+        SharedSPIBus::Guard busGuard;
+        if (busGuard) {
+            _tft.setBrightness(0);
+            taskENTER_CRITICAL(&_stateMux);
+            _screenOff = true;
+            taskEXIT_CRITICAL(&_stateMux);
+        }
     }
 }
 
@@ -692,6 +732,12 @@ void TFTManager::freeForOTA() {
     _sprite.deleteSprite();
     Serial.printf("TFTManager: Sprite freed, heap now %u\n", ESP.getFreeHeap());
 
+    SharedSPIBus::Guard busGuard;
+    if (!busGuard) {
+        Serial.println("TFTManager: shared SPI OTA-screen lock timed out");
+        return;
+    }
+
     // Wake screen for OTA progress display
     _tft.setBrightness(255);
 
@@ -729,6 +775,9 @@ void TFTManager::freeForOTA() {
 void TFTManager::updateOTAProgress(uint8_t percent) {
     if (percent > 100) percent = 100;
 
+    SharedSPIBus::Guard busGuard;
+    if (!busGuard) return;
+
     int barX = 20;
     int barY = 120;
     int barW = _tft.width() - 40;  // 200px
@@ -752,6 +801,9 @@ void TFTManager::updateOTAProgress(uint8_t percent) {
 }
 
 void TFTManager::showOTAError(const char* error) {
+    SharedSPIBus::Guard busGuard;
+    if (!busGuard) return;
+
     int cx = _tft.width() / 2;
 
     // Clear progress bar and text area

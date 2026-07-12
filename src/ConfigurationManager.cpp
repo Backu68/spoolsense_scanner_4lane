@@ -217,6 +217,19 @@ static void sanitizeNfcPinSet(uint8_t pins[6], bool lcdOn, bool tftOn, bool keyp
     }
 
     bool conflict = false;
+#if defined(BOARD_SHARED_SPI)
+    // LovyanGFX performs the single Arduino SPI.begin() for the whole bus using
+    // the board's compile-time pins (SCK/MOSI, and MISO routed to the NFC MISO).
+    // Arduino's SPIClass::begin() ignores a later begin(), so while TFT is
+    // enabled a runtime NFC remap of any bus line cannot re-route it — reject
+    // remaps that would diverge from the physical shared bus.
+    if (tftOn && (effective[(int)NfcPinId::Sck]  != PIN_TFT_SCLK ||
+                  effective[(int)NfcPinId::Mosi] != PIN_TFT_MOSI ||
+                  effective[(int)NfcPinId::Miso] != PIN_PN5180_MISO)) {
+        Serial.println("ConfigurationManager: shared-SPI NFC SCK/MOSI/MISO must match the TFT bus");
+        conflict = true;
+    }
+#endif
     for (int i = 0; i < 6 && !conflict; i++) {
         for (int j = i + 1; j < 6; j++) {
             if (effective[i] >= 0 && effective[i] == effective[j]) {

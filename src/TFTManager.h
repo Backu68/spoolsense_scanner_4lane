@@ -144,6 +144,7 @@ private:
 
     QueueHandle_t _messageQueue;
     TaskHandle_t _taskHandle;
+    bool _began = false;  // panel + bus initialized; render task must not start otherwise
 
     uint32_t _screenTimeoutMs;
     unsigned long _lastActivityMs;

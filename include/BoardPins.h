@@ -87,16 +87,16 @@
 #elif defined(BOARD_ESP32_C6)
   // --- ESP32-C6-DevKitC-1 pin mapping ---
   // NFC uses the sole general-purpose SPI controller. GPIO 12/13 remain free
-  // for native USB; straps 4/5/9/15 are avoided. TFT/keypad are unsupported.
+  // for native USB; straps 4/5/9/15 are avoided. TFT shares SCK/MOSI with NFC.
   #define PIN_PN5180_SCK   6
   #define PIN_PN5180_MOSI  7
   #define PIN_PN5180_MISO  2
   #define PIN_PN5180_NSS   10
   #define PIN_PN5180_BUSY  1
   #define PIN_PN5180_RST   0
-  #define PIN_PN5180_GPIO  3
-  #define PIN_PN5180_IRQ   11
-  #define PIN_PN5180_AUX   18
+  #define PIN_PN5180_GPIO  -1
+  #define PIN_PN5180_IRQ   -1
+  #define PIN_PN5180_AUX   -1
   #define PIN_PN532_SCK    PIN_PN5180_SCK
   #define PIN_PN532_MOSI   PIN_PN5180_MOSI
   #define PIN_PN532_MISO   PIN_PN5180_MISO
@@ -115,12 +115,12 @@
   #define PIN_KEYPAD_COL1  -1
   #define PIN_KEYPAD_COL2  -1
   #define PIN_KEYPAD_COL3  -1
-  #define PIN_TFT_MOSI     -1
-  #define PIN_TFT_SCLK     -1
+  #define PIN_TFT_MOSI     PIN_PN5180_MOSI
+  #define PIN_TFT_SCLK     PIN_PN5180_SCK
   #define PIN_TFT_MISO     -1
-  #define PIN_TFT_CS       -1
-  #define PIN_TFT_DC       -1
-  #define PIN_TFT_RST      -1
+  #define PIN_TFT_CS       3
+  #define PIN_TFT_DC       11
+  #define PIN_TFT_RST      18
   #define PIN_TFT_BL       -1
 
 #elif defined(BOARD_ESP32_C5)
@@ -133,9 +133,9 @@
   #define PIN_PN5180_NSS   10
   #define PIN_PN5180_BUSY  1
   #define PIN_PN5180_RST   0
-  #define PIN_PN5180_GPIO  4
-  #define PIN_PN5180_IRQ   5
-  #define PIN_PN5180_AUX   23
+  #define PIN_PN5180_GPIO  -1
+  #define PIN_PN5180_IRQ   -1
+  #define PIN_PN5180_AUX   -1
   #define PIN_PN532_SCK    PIN_PN5180_SCK
   #define PIN_PN532_MOSI   PIN_PN5180_MOSI
   #define PIN_PN532_MISO   PIN_PN5180_MISO
@@ -152,12 +152,14 @@
   #define PIN_KEYPAD_COL1  -1
   #define PIN_KEYPAD_COL2  -1
   #define PIN_KEYPAD_COL3  -1
-  #define PIN_TFT_MOSI     -1
-  #define PIN_TFT_SCLK     -1
+  // Capability-ready shared-bus map. TFT remains disabled until the pinned
+  // LovyanGFX release supports ESP32-C5's GPIO register layout.
+  #define PIN_TFT_MOSI     PIN_PN5180_MOSI
+  #define PIN_TFT_SCLK     PIN_PN5180_SCK
   #define PIN_TFT_MISO     -1
-  #define PIN_TFT_CS       -1
-  #define PIN_TFT_DC       -1
-  #define PIN_TFT_RST      -1
+  #define PIN_TFT_CS       4
+  #define PIN_TFT_DC       5
+  #define PIN_TFT_RST      12
   #define PIN_TFT_BL       -1
 
 #elif defined(BOARD_ESP32_C3)
