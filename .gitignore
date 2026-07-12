@@ -33,3 +33,6 @@ lancedb/
 .ragcode/
 .DS_Store
 .superpowers/
+
+# Generated gzipped web assets (built by scripts/gen_gzip_assets.py)
+src/gen/

@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [1.8.3] - 2026-07-11
 
 ### Security
 
@@ -12,6 +12,10 @@
 - **ILI9341 and ILI9488 TFT support** — both ILI94xx panels join the TFT driver dropdown. The 240×240 dashboard renders centered on the larger panels. (#180)
 - **Release assets ship `.sha256` checksums** — the installer already verifies downloads against sidecar checksums and fails closed; scanner releases now publish them, so a corrupted download gets caught before it flashes instead of boot-looping the board. (#227)
 - **Integration bench runner** — `test/integration/run_bench.sh` packages the mock-PrusaLink scenarios (full print, cancel proration, filament mismatch, XL multi-tool) into a one-command hardware-in-the-loop bench suite with documented prerequisites. (#225)
+
+### Improved
+
+- **Web UI pages load ~4× smaller** — the HTML, CSS, and JS assets are now pre-compressed at build time and served with `Content-Encoding: gzip`, cutting the total transferred from ~226 KB to ~56 KB (each page 21–35% of its former size). A `pre:` build step gzips the readable source in `src/*HTML.h` / `src/Shared*.h` into generated PROGMEM byte arrays with the firmware version baked in, so page authoring is unchanged. As a side effect the uncompressed copies are no longer compiled in, reclaiming ~174 KB of flash.
 
 ### Fixed
 
