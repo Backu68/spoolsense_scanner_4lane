@@ -99,33 +99,31 @@ void diagRedactUid(char* dst, size_t dst_len, const char* uid) {
     snprintf(dst, dst_len, "%.4s...%s", uid, uid + (n - 4));
 }
 
+// Emit only scheme://host[:port] — dropping userinfo (user:pass@), the path,
+// and the query string, since any of those can carry a credential
+// (?api_key=..., /token/..., user:pass@). Reachability triage only needs the
+// host and port.
 void diagRedactUrl(char* dst, size_t dst_len, const char* url) {
     if (dst_len == 0) return;
     if (!url) { dst[0] = '\0'; return; }
 
     const char* scheme_end = strstr(url, "://");
     if (!scheme_end) {
-        // No scheme — copy verbatim (bounded).
-        snprintf(dst, dst_len, "%s", url);
+        // No scheme (e.g. a bare "host:port/path") — keep host[:port] only.
+        size_t host_len = strcspn(url, "/?");
+        if (host_len >= dst_len) host_len = dst_len - 1;
+        memcpy(dst, url, host_len);
+        dst[host_len] = '\0';
         return;
     }
+
     const char* authority = scheme_end + 3;
-
-    // userinfo, if present, ends at '@' before the next '/'.
+    const char* auth_end = authority + strcspn(authority, "/?");  // host ends at path/query
     const char* at = strchr(authority, '@');
-    const char* slash = strchr(authority, '/');
-    if (at && (!slash || at < slash)) {
-        // Emit scheme://<host-onward>, dropping user:pass@.
-        size_t scheme_len = (size_t)(authority - url);  // includes "://"
-        if (scheme_len >= dst_len) scheme_len = dst_len - 1;
-        memcpy(dst, url, scheme_len);
-        dst[scheme_len] = '\0';
-        // append everything after '@'
-        size_t used = strlen(dst);
-        snprintf(dst + used, dst_len - used, "%s", at + 1);
-        return;
-    }
+    const char* host = (at && at < auth_end) ? at + 1 : authority;  // drop userinfo
 
-    // No credentials to strip.
-    snprintf(dst, dst_len, "%s", url);
+    size_t pos = 0;
+    for (const char* p = url; p < authority && pos < dst_len - 1; ++p) dst[pos++] = *p;  // "scheme://"
+    for (const char* p = host; p < auth_end && pos < dst_len - 1; ++p) dst[pos++] = *p;  // host[:port]
+    dst[pos] = '\0';
 }

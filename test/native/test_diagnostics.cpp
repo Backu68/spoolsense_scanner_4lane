@@ -81,15 +81,17 @@ int main() {
     diagRedactUid(buf, sizeof(buf), "AABBCCDD");  // exactly 8
     CHECK(strcmp(buf, "****") == 0, "8-char UID masked (boundary)");
 
-    // --- URL redaction ---
+    // --- URL redaction: emit scheme://host[:port] only ---
     diagRedactUrl(buf, sizeof(buf), "http://user:pass@192.168.1.32:7912/api/v1/info");
-    CHECK(strcmp(buf, "http://192.168.1.32:7912/api/v1/info") == 0, "strips userinfo");
+    CHECK(strcmp(buf, "http://192.168.1.32:7912") == 0, "strips userinfo AND path");
     diagRedactUrl(buf, sizeof(buf), "http://192.168.1.32:7912/api/v1/info");
-    CHECK(strcmp(buf, "http://192.168.1.32:7912/api/v1/info") == 0, "no creds -> unchanged");
+    CHECK(strcmp(buf, "http://192.168.1.32:7912") == 0, "drops path/query");
     diagRedactUrl(buf, sizeof(buf), "spoolman.local");
-    CHECK(strcmp(buf, "spoolman.local") == 0, "no scheme -> verbatim");
+    CHECK(strcmp(buf, "spoolman.local") == 0, "bare host verbatim");
+    diagRedactUrl(buf, sizeof(buf), "host:7912/path?token=SECRET");
+    CHECK(strcmp(buf, "host:7912") == 0, "no-scheme host:port keeps only host:port");
     diagRedactUrl(buf, sizeof(buf), "https://token:x@host/path?a=b@c");
-    CHECK(strcmp(buf, "https://host/path?a=b@c") == 0, "only authority '@' stripped, not path '@'");
+    CHECK(strcmp(buf, "https://host") == 0, "userinfo + path + query all stripped");
 
     printf("%s: %d failure(s)\n", failures ? "FAILED" : "OK", failures);
     return failures ? 1 : 0;

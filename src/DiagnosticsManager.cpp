@@ -7,13 +7,19 @@
 #include <ArduinoJson.h>
 #include <esp_system.h>
 #include <esp_heap_caps.h>
+#include <stdarg.h>
 
 #include "NFCManager.h"
 #include "MemoryDiagnostics.h"
 #include "ConfigurationManager.h"
 #include "HomeAssistantManager.h"
-#include "ConfigurationManager.h"
 #include "LogBuffer.h"
+
+// Serializes all outbound HTTP/TLS (created in main.cpp, shared with the web +
+// Spoolman + printer tasks). The network reachability checks below take it so a
+// diagnostic request can't overlap a concurrent Spoolman/printer request.
+extern SemaphoreHandle_t g_httpMutex;
+static constexpr uint32_t DIAG_HTTP_MUTEX_MS = 5000;
 
 // Worker task sizing. Low priority so it never starves the scan/web tasks.
 static constexpr uint32_t DIAG_TASK_STACK = 6144;
@@ -351,6 +357,7 @@ void DiagnosticsManager::checkSpoolman() {
     char safeUrl[128];
     diagRedactUrl(safeUrl, sizeof(safeUrl), cfg.spoolman_url);
 
+    bool held = g_httpMutex && (xSemaphoreTake(g_httpMutex, pdMS_TO_TICKS(DIAG_HTTP_MUTEX_MS)) == pdTRUE);
     HTTPClient http;
     char infoUrl[160];
     snprintf(infoUrl, sizeof(infoUrl), "%s/api/v1/info", cfg.spoolman_url);
@@ -368,6 +375,7 @@ void DiagnosticsManager::checkSpoolman() {
         }
     }
     http.end();
+    if (held) xSemaphoreGive(g_httpMutex);
 
     char summary[96];
     if (code == 200) {
@@ -404,6 +412,7 @@ void DiagnosticsManager::checkPrinter() {
     char safeUrl[128];
     diagRedactUrl(safeUrl, sizeof(safeUrl), baseUrl);
 
+    bool held = g_httpMutex && (xSemaphoreTake(g_httpMutex, pdMS_TO_TICKS(DIAG_HTTP_MUTEX_MS)) == pdTRUE);
     HTTPClient http;
     char url[192];
     snprintf(url, sizeof(url), "%s%s", baseUrl, path);
@@ -413,6 +422,7 @@ void DiagnosticsManager::checkPrinter() {
     int code = http.GET();
     uint32_t dt = millis() - t0;
     http.end();
+    if (held) xSemaphoreGive(g_httpMutex);
 
     char summary[96];
     // 401 still proves reachability (PrusaLink wants an API key) — treat as reachable.
@@ -526,13 +536,16 @@ void DiagnosticsManager::runStabilityStage() {
             } else if (len != baselineLen || memcmp(uid, baselineUid, len) != 0) {
                 m.uid_mismatches++;
             }
-            // Periodic read-stability probe on the detected tag.
-            if ((i % STABILITY_READ_EVERY) == 0) {
+            // Periodic read-stability probe. readISO14443Pages is ISO14443A/NTAG
+            // only, so gate on an ISO14443A detect (ATQA set) — an ISO15693 tag
+            // (OpenPrintTag) would otherwise fail every probe and be falsely
+            // penalized. Require a full 4-page (16-byte) read to count.
+            if ((i % STABILITY_READ_EVERY) == 0 && conn->getLastATQA() != 0) {
                 conn->setCurrentUid(uid, len);
                 m.read_attempts++;
                 // keepSession=true: don't halt the tag between cycles.
                 uint16_t got = conn->readISO14443Pages(4, 4, readBuf, sizeof(readBuf), true);
-                if (got > 0) m.read_success++;
+                if (got == sizeof(readBuf)) m.read_success++;
             }
         }
 #ifndef NATIVE_TEST
@@ -639,28 +652,42 @@ const char* DiagnosticsManager::statusName(DiagnosticStatus s) {
     }
 }
 
+// Append formatted text at buf[off], never writing past buflen-1 and never
+// returning an offset >= buflen (so buf+off / buflen-off stay in-bounds on the
+// next call even when a write truncates).
+static size_t appendReport(char* buf, size_t buflen, size_t off, const char* fmt, ...) {
+    if (off + 1 >= buflen) return off;  // no room left (keep space for NUL)
+    va_list ap;
+    va_start(ap, fmt);
+    int n = vsnprintf(buf + off, buflen - off, fmt, ap);
+    va_end(ap);
+    if (n < 0) return off;
+    size_t written = (size_t)n;
+    size_t room = buflen - off - 1;      // max that actually fit
+    return off + (written < room ? written : room);
+}
+
 size_t DiagnosticsManager::buildReport(char* buf, size_t buflen) {
     if (!buf || buflen == 0) return 0;
     Snapshot s;
     getSnapshot(s);
 
     size_t off = 0;
-    off += snprintf(buf + off, buflen - off, "SpoolSense self-test report (report-format v1)\n");
-    off += snprintf(buf + off, buflen - off, "Overall: %s\n", statusName(s.overall));
-    if (s.stability_ran && off < buflen) {
-        off += snprintf(buf + off, buflen - off, "NFC stability score: %u/100\n", s.stability_score);
+    off = appendReport(buf, buflen, off, "SpoolSense self-test report (report-format v1)\n");
+    off = appendReport(buf, buflen, off, "Overall: %s\n", statusName(s.overall));
+    if (s.stability_ran) {
+        off = appendReport(buf, buflen, off, "NFC stability score: %u/100\n", s.stability_score);
     }
-    if (off < buflen) off += snprintf(buf + off, buflen - off, "----\n");
+    off = appendReport(buf, buflen, off, "----\n");
 
-    for (uint8_t i = 0; i < s.result_count && off < buflen; i++) {
+    for (uint8_t i = 0; i < s.result_count; i++) {
         const DiagnosticResult& r = s.results[i];
-        off += snprintf(buf + off, buflen - off, "[%s] %s: %s\n",
-                        statusName(r.status), testName(r.test), r.summary);
-        if (r.recommendation[0] && off < buflen) {
-            off += snprintf(buf + off, buflen - off, "       -> %s\n", r.recommendation);
+        off = appendReport(buf, buflen, off, "[%s] %s: %s\n",
+                           statusName(r.status), testName(r.test), r.summary);
+        if (r.recommendation[0]) {
+            off = appendReport(buf, buflen, off, "       -> %s\n", r.recommendation);
         }
     }
-    if (off >= buflen) off = buflen - 1;
     buf[off] = '\0';
     return off;
 }
