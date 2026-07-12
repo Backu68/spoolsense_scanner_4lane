@@ -1,4 +1,5 @@
 #include "HardwareNFCConnection.h"
+#include "ConfigurationManager.h"
 #include <Arduino.h>
 #include <cstring>
 #include <esp_task_wdt.h>
@@ -88,29 +89,40 @@ bool HardwareNFCConnection::begin() {
     pinMode(PIN_PN5180_GPIO, INPUT);   // Card detection (unused, manual polling via getInventory)
     pinMode(PIN_PN5180_AUX, INPUT);    // Auxiliary/monitoring (unused)
 
-    nfc_ = new PN5180ISO15693(PIN_PN5180_NSS, PIN_PN5180_BUSY, PIN_PN5180_RST,
-                               PIN_PN5180_SCK, PIN_PN5180_MISO, PIN_PN5180_MOSI);
-    iso14443a_ = new PN5180ISO14443(PIN_PN5180_NSS, PIN_PN5180_BUSY, PIN_PN5180_RST,
-                                    PIN_PN5180_SCK, PIN_PN5180_MISO, PIN_PN5180_MOSI);
+    // Runtime pin overrides (#201): board defaults unless remapped in config
+    {
+        auto& cfg = ConfigurationManager::getInstance();
+        pinRst_  = cfg.getNfcPin(NfcPinId::Rst);
+        pinNss_  = cfg.getNfcPin(NfcPinId::Nss);
+        pinBusy_ = cfg.getNfcPin(NfcPinId::Busy);
+        pinSck_  = cfg.getNfcPin(NfcPinId::Sck);
+        pinMosi_ = cfg.getNfcPin(NfcPinId::Mosi);
+        pinMiso_ = cfg.getNfcPin(NfcPinId::Miso);
+    }
+
+    nfc_ = new PN5180ISO15693(pinNss_, pinBusy_, pinRst_,
+                               pinSck_, pinMiso_, pinMosi_);
+    iso14443a_ = new PN5180ISO14443(pinNss_, pinBusy_, pinRst_,
+                                    pinSck_, pinMiso_, pinMosi_);
 
     Serial.println("HardwareNFCConnection: Starting PN5180...");
     Serial.printf("HardwareNFCConnection: Pins — NSS=%d BUSY=%d RST=%d SCK=%d MISO=%d MOSI=%d\n",
-                  PIN_PN5180_NSS, PIN_PN5180_BUSY, PIN_PN5180_RST,
-                  PIN_PN5180_SCK, PIN_PN5180_MISO, PIN_PN5180_MOSI);
+                  pinNss_, pinBusy_, pinRst_,
+                  pinSck_, pinMiso_, pinMosi_);
     nfc_->begin();
     iso14443a_->begin();
     Serial.println("HardwareNFCConnection: SPI begin done, resetting...");
-    Serial.printf("HardwareNFCConnection: BUSY pin=%d before reset\n", digitalRead(PIN_PN5180_BUSY));
+    Serial.printf("HardwareNFCConnection: BUSY pin=%d before reset\n", digitalRead(pinBusy_));
 
     // Manual reset with timeout: PN5180::reset() library call has no timeout, blocking on hung chips
-    digitalWrite(PIN_PN5180_RST, LOW);
+    digitalWrite(pinRst_, LOW);
     delay(10);
-    digitalWrite(PIN_PN5180_RST, HIGH);
+    digitalWrite(pinRst_, HIGH);
     Serial.println("HardwareNFCConnection: RST pin released, waiting for boot...");
 
     // BUSY signal indicates RF subsystem boot state; timeout detects dead/unreliable chips
     unsigned long start = millis();
-    while (digitalRead(PIN_PN5180_BUSY) == HIGH) {
+    while (digitalRead(pinBusy_) == HIGH) {
         if (millis() - start > 2000) {
             Serial.println("HardwareNFCConnection: TIMEOUT waiting for BUSY LOW after reset!");
             break;
@@ -174,14 +186,14 @@ bool HardwareNFCConnection::hardwareReset() {
     Serial.println("HardwareNFC: hardwareReset() - toggling RST pin");
 
     // Toggle RST pin to force full hardware reset
-    digitalWrite(PIN_PN5180_RST, LOW);
+    digitalWrite(pinRst_, LOW);
     delay(10);
-    digitalWrite(PIN_PN5180_RST, HIGH);
+    digitalWrite(pinRst_, HIGH);
     PN5180::clearBusWedged();  // fresh chip — release the fail-fast latch
 
     // Wait for BUSY to go LOW with timeout
     unsigned long start = millis();
-    while (digitalRead(PIN_PN5180_BUSY) == HIGH) {
+    while (digitalRead(pinBusy_) == HIGH) {
         if (millis() - start > 2000) {
             Serial.println("HardwareNFC: hardwareReset TIMEOUT waiting for BUSY LOW");
             return false;
@@ -447,6 +459,28 @@ void HardwareNFCConnection::setCurrentUid(const uint8_t* uid, uint8_t length) {
 
 opt_nfc_hal_t* HardwareNFCConnection::getHal() {
     return &hal_;
+}
+
+bool HardwareNFCConnection::getDiagnosticSnapshot(ReaderDiagnostics& out) {
+    memset(&out, 0, sizeof(out));
+    getReaderInfo(out.reader_name, sizeof(out.reader_name));
+    out.initialized = pn5180Ready_;
+    out.fw_major = fw_[1];
+    out.fw_minor = fw_[0];
+    out.has_registers = true;
+    out.bus_wedged = PN5180::isBusWedged();
+    // A wedged bus fails every transaction fast — its register values are
+    // meaningless, so only sample them when the bus is live.
+    if (nfc_ && !out.bus_wedged) {
+        uint32_t irq = 0, rf = 0, sys = 0;
+        nfc_->readRegister(IRQ_STATUS, &irq);
+        nfc_->readRegister(RF_STATUS, &rf);
+        nfc_->readRegister(SYSTEM_STATUS, &sys);
+        out.irq_status = irq;
+        out.rf_status = rf;
+        out.system_status = sys;
+    }
+    return true;
 }
 
 void HardwareNFCConnection::logDiagnostics() {

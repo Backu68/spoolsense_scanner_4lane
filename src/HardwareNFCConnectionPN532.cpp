@@ -1,4 +1,5 @@
 #include "HardwareNFCConnectionPN532.h"
+#include "ConfigurationManager.h"
 #include "openprinttag_adafruit_pn532.h"
 #include "BoardPins.h"
 
@@ -21,9 +22,18 @@ HardwareNFCConnectionPN532::~HardwareNFCConnectionPN532() {
 
 bool HardwareNFCConnectionPN532::begin() {
     // PN532 uses separate SPI bus; explicit pin mapping prevents conflicts with PN5180 on HSPI
-    SPI.begin(PIN_PN532_SCK, PIN_PN532_MISO, PIN_PN532_MOSI, PIN_PN532_SS);
+    // Runtime pin overrides (#201): PN532 shares the NFC pin slots (SS=NSS; BUSY unused)
+    {
+        auto& cfg = ConfigurationManager::getInstance();
+        pinRst_ = cfg.getNfcPin(NfcPinId::Rst);
+        pinSs_  = cfg.getNfcPin(NfcPinId::Nss);
+        pinSck_ = cfg.getNfcPin(NfcPinId::Sck);
+        pinMosi_ = cfg.getNfcPin(NfcPinId::Mosi);
+        pinMiso_ = cfg.getNfcPin(NfcPinId::Miso);
+    }
+    SPI.begin(pinSck_, pinMiso_, pinMosi_, pinSs_);
 
-    pn532_ = new Adafruit_PN532(PIN_PN532_SS, &SPI);
+    pn532_ = new Adafruit_PN532(pinSs_, &SPI);
     if (!pn532_) {
         Serial.println("PN532: Failed to allocate");
         return false;
@@ -74,10 +84,10 @@ void HardwareNFCConnectionPN532::reset() {
 
 bool HardwareNFCConnectionPN532::hardwareReset() {
     // Toggle RST pin for hardware reset: forces state machine reboot
-    pinMode(PIN_PN532_RST, OUTPUT);
-    digitalWrite(PIN_PN532_RST, LOW);
+    pinMode(pinRst_, OUTPUT);
+    digitalWrite(pinRst_, LOW);
     delay(10);
-    digitalWrite(PIN_PN532_RST, HIGH);
+    digitalWrite(pinRst_, HIGH);
     delay(50);  // PN532 boot time before first SPI command
 
     if (pn532_) {
@@ -212,6 +222,17 @@ void HardwareNFCConnectionPN532::getReaderInfo(char* buf, size_t len) const {
             snprintf(buf, len, "PN532 v%d.%d", fwMajor_, fwMinor_);  // cached at init
         }
     }
+}
+
+bool HardwareNFCConnectionPN532::getDiagnosticSnapshot(ReaderDiagnostics& out) {
+    memset(&out, 0, sizeof(out));
+    getReaderInfo(out.reader_name, sizeof(out.reader_name));
+    out.initialized = ready_;
+    out.fw_major = fwMajor_;
+    out.fw_minor = fwMinor_;
+    out.has_registers = false;   // firmware-managed radio; no register interface
+    out.sam_config_ok = ready_;  // begin() sets ready_ only after SAMConfig() succeeds
+    return true;
 }
 
 void HardwareNFCConnectionPN532::logDiagnostics() {

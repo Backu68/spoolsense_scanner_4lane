@@ -31,11 +31,17 @@ public:
     void getReaderInfo(char* buf, size_t len) const override;
     // Diagnostics: log RF_STATUS, IRQ_STATUS, SYSTEM_STATUS registers
     void logDiagnostics() override;
+    // Structured snapshot: firmware + RF/IRQ/SYSTEM registers + bus-wedged latch.
+    bool getDiagnosticSnapshot(ReaderDiagnostics& out) override;
     // Returns PN5180 firmware version bytes (set during begin()). fw[0]=minor, fw[1]=major.
     void getPN5180FirmwareVersion(uint8_t fw[2]) const { fw[0] = fw_[0]; fw[1] = fw_[1]; }
     bool isPN5180Ready() const { return pn5180Ready_; }
 
 private:
+    // Effective NFC pins, captured once from ConfigurationManager at begin()
+    // — runtime overrides (#201) apply on the post-save reboot
+    uint8_t pinRst_ = 0, pinNss_ = 0, pinBusy_ = 0;
+    uint8_t pinSck_ = 0, pinMosi_ = 0, pinMiso_ = 0;
     PN5180ISO15693* nfc_ = nullptr;
     PN5180ISO14443* iso14443a_ = nullptr;
     opt_nfc_hal_t hal_;

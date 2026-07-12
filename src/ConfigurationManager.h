@@ -13,6 +13,11 @@ void sanitizeHostname(char* buf, size_t cap);
 #endif
 #define DEVICE_VERSION FIRMWARE_VERSION
 
+// Runtime-configurable NFC reader pins (#201). Index order is fixed — NVS
+// keys, config API fields, and the UI all follow it. PN532 uses the same six
+// slots (SS=NSS; no BUSY — that slot is simply unused by the PN532 driver).
+enum class NfcPinId : uint8_t { Rst = 0, Nss, Busy, Sck, Mosi, Miso, Count };
+
 // led_pin sentinel: absent in NVS or 0xFF means "use the board default"
 // (PIN_STATUS_LED). Any other value is a user GPIO override. (#203)
 static constexpr uint8_t LED_PIN_DEFAULT = 0xFF;
@@ -51,6 +56,7 @@ struct ConfigUpdate {
     uint8_t u1_mode;          // 0 = fixed channel, 1 = stage (pick channel after each scan)
     uint8_t u1_auto_pick;     // stage mode: 1 = assign to the first lane that loads (default on)
     uint8_t led_pin;          // status LED GPIO override; LED_PIN_DEFAULT = board default (#203)
+    uint8_t nfc_pins[6];      // NFC reader pin overrides (NfcPinId order); 0xFF = board default (#201)
 };
 
 class ConfigurationManager {
@@ -97,6 +103,10 @@ public:
 
     // Effective status-LED GPIO: user override when set and valid, else PIN_STATUS_LED (#203)
     uint8_t getLedPin() const;
+    // Effective NFC reader pin: NVS override when set and valid, else the
+    // board default from BoardPins.h. Consumers read these once at begin();
+    // changes apply on the post-save reboot. (#201)
+    uint8_t getNfcPin(NfcPinId id) const;
 
     // Low-spool threshold (grams) — LED breathes when remaining weight is at or below this
     uint16_t getLowSpoolThreshold() const;
@@ -173,6 +183,8 @@ private:
     bool _u1AutoPick = true;  // stage mode: motion-sensor auto-assign
 
     uint8_t _ledPin = LED_PIN_DEFAULT;  // 0xFF = use board default (PIN_STATUS_LED)
+    uint8_t _nfcPins[6] = { LED_PIN_DEFAULT, LED_PIN_DEFAULT, LED_PIN_DEFAULT,
+                            LED_PIN_DEFAULT, LED_PIN_DEFAULT, LED_PIN_DEFAULT };
 
     bool _initialized = false;
 };

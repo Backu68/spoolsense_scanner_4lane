@@ -42,7 +42,9 @@ typedef struct {
     uint16_t target_weight_g;        /* Grams (total spool) */
     uint8_t  print_temp_encoded;     /* °C ÷ 5 */
     uint8_t  bed_temp_encoded;       /* °C ÷ 5 */
-    uint16_t density_ugcm3;          /* µg/cm³ */
+    uint16_t density_ugcm3;          /* NOTE: mg/cm³ on-tag despite the name —
+                                        a u16 can't hold µg/cm³; writers encode
+                                        round(g/cm³ * 1000). Divide by 1000. */
     uint16_t transmission_distance;  /* mm ÷ 0.1, optional */
 
     /* Extended fields (zero if not present) */

@@ -34,6 +34,11 @@ private:
     bool _apMode = false;
 
     // Page handlers
+    // Serve a pre-gzipped PROGMEM asset with Content-Encoding: gzip. Preserves
+    // any headers (e.g. Cache-Control) already queued for this response.
+    void sendGzip(int code, const char* contentType,
+                  const uint8_t* data, size_t len);
+
     void handleLanding();
     void handleReader();
     void handleOpenPrintTagWriter();
@@ -64,6 +69,13 @@ private:
     void handleApiGetConfig();
     void handleApiPostConfig();
     void handleApiDiagnostics();
+
+    // Self-test wizard (#253)
+    void handleApiSelfTestStart();
+    void handleApiSelfTestStatus();
+    void handleApiSelfTestInput();
+    void handleApiSelfTestCancel();
+    void handleApiSelfTestReport();
     void handleTroubleshootingPage();
     void handleUIDRegistrationPage();
     void handleApiRegisterUid();

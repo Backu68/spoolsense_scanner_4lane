@@ -10,27 +10,19 @@
 #include <WiFiClientSecure.h>
 
 #include "MemoryDiagnostics.h"
-#include "LandingHTML.h"
-#include "OpenPrintTagWriterHTML.h"
-#include "ReaderHTML.h"
-#include "TigerTagWriterHTML.h"
-#include "OpenTag3DWriterHTML.h"
-#include "SharedCSS.h"
-#include "SharedJS.h"
-#include "ConfigHTML.h"
-#include "TroubleshootingHTML.h"
-#include "UIDRegistrationHTML.h"
+// Text UI assets (HTML/CSS/JS) are served pre-gzipped from generated PROGMEM
+// byte arrays; the readable source lives in src/*HTML.h / src/Shared*.h and is
+// compiled into WebAssetsGz.h by scripts/gen_gzip_assets.py at build time.
+#include "gen/WebAssetsGz.h"
 #include "OpenPrintTagLogo.h"
 #include "TigerTagLogo.h"
 #include "OpenTag3DLogo.h"
 #include "OpenSpoolLogo.h"
-#include "OpenSpoolWriterHTML.h"
-#include "UpdateHTML.h"
-#include "LogViewerHTML.h"
 #include "LogBuffer.h"
 #include "ConfigurationManager.h"
 #include "NFCManager.h"
 #include "U1Manager.h"
+#include "DiagnosticsManager.h"
 #include "NFCTypes.h"
 #include "NFCWriteTypes.h"
 #include "ApplicationManager.h"
@@ -131,6 +123,11 @@ bool WebServerManager::begin(bool apMode, uint16_t port) {
     _server.on("/api/config",          HTTP_POST, [this]() { handleApiPostConfig(); });
     _server.on("/api/status",          HTTP_GET,  [this]() { handleApiStatus(); });
     _server.on("/api/diagnostics",     HTTP_GET,  [this]() { handleApiDiagnostics(); });
+    _server.on("/api/diagnostics/session",        HTTP_POST, [this]() { handleApiSelfTestStart(); });
+    _server.on("/api/diagnostics/session",        HTTP_GET,  [this]() { handleApiSelfTestStatus(); });
+    _server.on("/api/diagnostics/session/input",  HTTP_POST, [this]() { handleApiSelfTestInput(); });
+    _server.on("/api/diagnostics/session/cancel", HTTP_POST, [this]() { handleApiSelfTestCancel(); });
+    _server.on("/api/diagnostics/report",         HTTP_GET,  [this]() { handleApiSelfTestReport(); });
     _server.on("/api/write-tag",       HTTP_POST, [this]() { handleApiWriteTag(); });
     _server.on("/api/format-tag",      HTTP_POST, [this]() { handleApiFormatTag(); });
     _server.on("/api/write-tigertag",  HTTP_POST, [this]() { handleApiWriteTigerTag(); });
@@ -196,38 +193,44 @@ void WebServerManager::handleClient() {
 // Page handlers
 // ---------------------------------------------------------------------------
 
+void WebServerManager::sendGzip(int code, const char* contentType,
+                                const uint8_t* data, size_t len) {
+    _server.sendHeader("Content-Encoding", "gzip");
+    _server.send_P(code, contentType, reinterpret_cast<const char*>(data), len);
+}
+
 void WebServerManager::handleLanding() {
-    _server.send_P(200, "text/html", LANDING_HTML);
+    sendGzip(200, "text/html", LANDING_HTML_GZ, LANDING_HTML_GZ_LEN);
 }
 
 void WebServerManager::handleReader() {
-    _server.send_P(200, "text/html", READER_HTML);
+    sendGzip(200, "text/html", READER_HTML_GZ, READER_HTML_GZ_LEN);
 }
 
 void WebServerManager::handleOpenPrintTagWriter() {
-    _server.send_P(200, "text/html", OPENPRINTTAG_WRITER_HTML);
+    sendGzip(200, "text/html", OPENPRINTTAG_WRITER_HTML_GZ, OPENPRINTTAG_WRITER_HTML_GZ_LEN);
 }
 
 void WebServerManager::handleTigerTagWriter() {
-    _server.send_P(200, "text/html", TIGERTAG_WRITER_HTML);
+    sendGzip(200, "text/html", TIGERTAG_WRITER_HTML_GZ, TIGERTAG_WRITER_HTML_GZ_LEN);
 }
 
 void WebServerManager::handleOpenTag3DWriter() {
-    _server.send_P(200, "text/html", OPENTAG3D_WRITER_HTML);
+    sendGzip(200, "text/html", OPENTAG3D_WRITER_HTML_GZ, OPENTAG3D_WRITER_HTML_GZ_LEN);
 }
 
 void WebServerManager::handleOpenSpoolWriter() {
-    _server.send_P(200, "text/html", OPENSPOOL_WRITER_HTML);
+    sendGzip(200, "text/html", OPENSPOOL_WRITER_HTML_GZ, OPENSPOOL_WRITER_HTML_GZ_LEN);
 }
 
 void WebServerManager::handleSharedCSS() {
     _server.sendHeader("Cache-Control", "no-store");
-    _server.send_P(200, "text/css", SHARED_CSS);
+    sendGzip(200, "text/css", SHARED_CSS_GZ, SHARED_CSS_GZ_LEN);
 }
 
 void WebServerManager::handleSharedJS() {
     _server.sendHeader("Cache-Control", "no-store");
-    _server.send_P(200, "application/javascript", SHARED_JS);
+    sendGzip(200, "application/javascript", SHARED_JS_GZ, SHARED_JS_GZ_LEN);
 }
 
 void WebServerManager::handleOpenPrintTagLogo() {
@@ -251,23 +254,23 @@ void WebServerManager::handleOpenSpoolLogo() {
 }
 
 void WebServerManager::handleUpdatePage() {
-    _server.send_P(200, "text/html", UPDATE_HTML);
+    sendGzip(200, "text/html", UPDATE_HTML_GZ, UPDATE_HTML_GZ_LEN);
 }
 
 void WebServerManager::handleConfigPage() {
-    _server.send_P(200, "text/html", CONFIG_HTML);
+    sendGzip(200, "text/html", CONFIG_HTML_GZ, CONFIG_HTML_GZ_LEN);
 }
 
 void WebServerManager::handleTroubleshootingPage() {
-    _server.send_P(200, "text/html", TROUBLESHOOTING_HTML);
+    sendGzip(200, "text/html", TROUBLESHOOTING_HTML_GZ, TROUBLESHOOTING_HTML_GZ_LEN);
 }
 
 void WebServerManager::handleUIDRegistrationPage() {
-    _server.send_P(200, "text/html", UID_REGISTRATION_HTML);
+    sendGzip(200, "text/html", UID_REGISTRATION_HTML_GZ, UID_REGISTRATION_HTML_GZ_LEN);
 }
 
 void WebServerManager::handleLogViewer() {
-    _server.send_P(200, "text/html", LOG_VIEWER_HTML);
+    sendGzip(200, "text/html", LOG_VIEWER_HTML_GZ, LOG_VIEWER_HTML_GZ_LEN);
 }
 
 void WebServerManager::handleApiLogs() {
@@ -660,6 +663,76 @@ void WebServerManager::handleApiSpoolmanPendingLink() {
     _server.send(200, "application/json", "{\"success\":true}");
 }
 
+// --- Self-test wizard (#253) ---------------------------------------------
+
+void WebServerManager::handleApiSelfTestStart() {
+    DiagnosticsManager::Options opts;  // defaults: network + stability on
+    if (_server.hasArg("plain") && _server.arg("plain").length() > 0) {
+        StaticJsonDocument<128> body;
+        // A malformed body must not silently start a full session (network
+        // checks + a scan pause window) — reject it instead.
+        if (deserializeJson(body, _server.arg("plain"))) {
+            sendError(400, "Invalid JSON");
+            return;
+        }
+        if (body.containsKey("network"))   opts.network   = body["network"].as<bool>();
+        if (body.containsKey("stability")) opts.stability = body["stability"].as<bool>();
+    }
+    if (!DiagnosticsManager::getInstance().startSession(opts)) {
+        sendError(409, "A self-test is already running");
+        return;
+    }
+    _server.send(200, "application/json", "{\"started\":true}");
+}
+
+void WebServerManager::handleApiSelfTestStatus() {
+    DiagnosticsManager::Snapshot s;
+    DiagnosticsManager::getInstance().getSnapshot(s);
+
+    JsonDocument doc;
+    doc["active"] = s.active;
+    doc["overall"] = DiagnosticsManager::statusName(s.overall);
+    doc["waiting_for_user"] = s.waiting_for_user;
+    doc["prompt"] = s.stage_prompt;
+    doc["stability_ran"] = s.stability_ran;
+    doc["stability_score"] = s.stability_score;
+    JsonArray arr = doc["results"].to<JsonArray>();
+    for (uint8_t i = 0; i < s.result_count; i++) {
+        JsonObject o = arr.add<JsonObject>();
+        o["test"]           = DiagnosticsManager::testName(s.results[i].test);
+        o["status"]         = DiagnosticsManager::statusName(s.results[i].status);
+        o["summary"]        = s.results[i].summary;
+        o["recommendation"] = s.results[i].recommendation;
+        o["code"]           = s.results[i].code;
+        o["duration_ms"]    = s.results[i].duration_ms;
+    }
+    String out;
+    serializeJson(doc, out);
+    _server.send(200, "application/json", out);
+}
+
+void WebServerManager::handleApiSelfTestInput() {
+    DiagnosticsManager::getInstance().submitUserContinue();
+    _server.send(200, "application/json", "{\"ok\":true}");
+}
+
+void WebServerManager::handleApiSelfTestCancel() {
+    DiagnosticsManager::getInstance().cancelSession();
+    _server.send(200, "application/json", "{\"ok\":true}");
+}
+
+void WebServerManager::handleApiSelfTestReport() {
+    const size_t CAP = 4096;
+    char* buf = (char*)malloc(CAP);
+    if (!buf) {
+        sendError(500, "out of memory");
+        return;
+    }
+    DiagnosticsManager::getInstance().buildReport(buf, CAP);
+    _server.send(200, "text/plain", buf);
+    free(buf);
+}
+
 void WebServerManager::handleApiDiagnostics() {
 
     // 1536: task stack-hwm entries added on top of the original 1024 payload
@@ -810,6 +883,20 @@ void WebServerManager::handleApiGetConfig() {
     }
     doc["tft_enabled"] = cfg.tft_enabled;
     doc["tft_driver"] = cfg.tft_driver;
+    {
+        // NFC pin overrides (#201): "" = board default; *_default carries the
+        // effective default so the page can show it as the placeholder
+        static const char* keys[6] = {"pin_nfc_rst","pin_nfc_nss","pin_nfc_busy",
+                                      "pin_nfc_sck","pin_nfc_mosi","pin_nfc_miso"};
+        auto& cm = ConfigurationManager::getInstance();
+        for (int i = 0; i < 6; i++) {
+            char defKey[24];
+            snprintf(defKey, sizeof(defKey), "%s_default", keys[i]);
+            if (cfg.nfc_pins[i] == LED_PIN_DEFAULT) doc[keys[i]] = "";
+            else doc[keys[i]] = cfg.nfc_pins[i];
+            doc[defKey] = cm.getNfcPin((NfcPinId)i);
+        }
+    }
     doc["ap_mode"] = _apMode;
     if (_apMode) {
         extern char g_apSSID[];
@@ -887,6 +974,22 @@ void WebServerManager::handleApiPostConfig() {
             long p = strtol(ledPinStr, &end, 10);
             bool numeric = (end != ledPinStr) && (*end == '\0');
             update.led_pin = (numeric && p >= 0 && p <= 254) ? (uint8_t)p : LED_PIN_DEFAULT;
+        }
+    }
+    {
+        // NFC pin overrides (#201): same string convention as led_pin
+        static const char* keys[6] = {"pin_nfc_rst","pin_nfc_nss","pin_nfc_busy",
+                                      "pin_nfc_sck","pin_nfc_mosi","pin_nfc_miso"};
+        for (int i = 0; i < 6; i++) {
+            const char* s = doc[keys[i]] | "";
+            if (s[0] == '\0') {
+                update.nfc_pins[i] = LED_PIN_DEFAULT;
+                continue;
+            }
+            char* end = nullptr;
+            long p = strtol(s, &end, 10);
+            bool numeric = (end != s) && (*end == '\0');
+            update.nfc_pins[i] = (numeric && p >= 0 && p <= 254) ? (uint8_t)p : LED_PIN_DEFAULT;
         }
     }
 
