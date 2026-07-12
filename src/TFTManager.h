@@ -134,6 +134,7 @@ private:
     void drawSpool(int cx, int cy, int outerR, int innerR, uint32_t fillColor);
     void drawWeightBar(int x, int y, int w, int h, float remaining, float total);
     void drawTagIcon(uint8_t tagType, int x, int y);
+    void blitCanvas();  // push _sprite at the panel-aware (centered on wide panels) origin
     uint32_t hexToRgb(const char* hex);
     uint32_t dimColor(uint32_t color, uint8_t brightness); // for low-spool breathing
 
@@ -145,6 +146,9 @@ private:
     QueueHandle_t _messageQueue;
     TaskHandle_t _taskHandle;
     bool _began = false;  // panel + bus initialized; render task must not start otherwise
+    bool _wide = false;   // panel larger than 240x240 (ILI9488) — landscape-capable
+    int  _blitOx = 0;     // centered-blit origin for the 240x240 sprite on wide panels
+    int  _blitOy = 0;
 
     uint32_t _screenTimeoutMs;
     unsigned long _lastActivityMs;

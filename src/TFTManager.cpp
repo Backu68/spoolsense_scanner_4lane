@@ -66,6 +66,11 @@ void TFTManager::begin() {
 #endif
     delay(100);  // panel initialization delay
     _tft.setRotation(0);
+    // Panel geometry: wide panels (ILI9488 480x320) center the 240x240 sprite;
+    // fillScreen below now clears the whole panel so no RAM-noise border shows.
+    _wide = (_tft.width() > 240 || _tft.height() > 240);
+    _blitOx = _wide ? (_tft.width()  - 240) / 2 : 0;
+    _blitOy = _wide ? (_tft.height() - 240) / 2 : 0;
     _tft.setBrightness(255);
     _tft.fillScreen(COLOR_BG);
 
@@ -314,7 +319,7 @@ void TFTManager::processQueue() {
                     renderStatus("Error", msg.statusText);
                     break;
                 case TFTState::TrayDashboard:
-                    _dashboard.render(&_sprite, msg.dashboardState);
+                    _dashboard.render(&_sprite, msg.dashboardState, _blitOx, _blitOy);
                     break;
             }
         }
@@ -357,6 +362,12 @@ void TFTManager::processQueue() {
 // Rendering
 // ---------------------------------------------------------------------------
 
+void TFTManager::blitCanvas() {
+    // 240x240 sprite pushed at the panel-aware origin: (0,0) on 240x240 panels,
+    // centered on wide panels (ILI9488) which were cleared to black at init.
+    _sprite.pushSprite(_blitOx, _blitOy);
+}
+
 void TFTManager::renderBoot(const char* version) {
     _sprite.fillScreen(COLOR_BG);
 
@@ -370,7 +381,7 @@ void TFTManager::renderBoot(const char* version) {
     _sprite.setTextSize(1);
     _sprite.drawString(version, _tft.width() / 2, _tft.height() / 2 + 20);
 
-    _sprite.pushSprite(0, 0);
+    blitCanvas();
 }
 
 void TFTManager::renderReady() {
@@ -394,7 +405,7 @@ void TFTManager::renderReady() {
     _sprite.setTextDatum(MC_DATUM);
     _sprite.drawString("Tap a spool to scan", cx, _tft.height() - 16);
 
-    _sprite.pushSprite(0, 0);
+    blitCanvas();
 }
 
 void TFTManager::renderSpoolScanned(const DisplaySpoolData& spool) {
@@ -447,7 +458,7 @@ void TFTManager::renderSpoolScanned(const DisplaySpoolData& spool) {
         _sprite.drawString(weightStr, cx, textY + 30);
     }
 
-    _sprite.pushSprite(0, 0);
+    blitCanvas();
 }
 
 void TFTManager::renderStatus(const char* line1, const char* line2) {
@@ -471,7 +482,7 @@ void TFTManager::renderStatus(const char* line1, const char* line2) {
         _sprite.drawString(line2, _tft.width() / 2, cy + 12);
     }
 
-    _sprite.pushSprite(0, 0);
+    blitCanvas();
 }
 
 void TFTManager::renderWriteResult(bool success, const char* tagFormat) {
@@ -510,7 +521,7 @@ void TFTManager::renderWriteResult(bool success, const char* tagFormat) {
         _sprite.drawString(tagFormat, cx, cy + 26);
     }
 
-    _sprite.pushSprite(0, 0);
+    blitCanvas();
 }
 
 void TFTManager::renderKeypadEntry(const char* toolNumber) {
@@ -534,7 +545,7 @@ void TFTManager::renderKeypadEntry(const char* toolNumber) {
     _sprite.setTextSize(1);
     _sprite.drawString("Press # to confirm", cx, 185);
 
-    _sprite.pushSprite(0, 0);
+    blitCanvas();
 }
 
 // ---------------------------------------------------------------------------
