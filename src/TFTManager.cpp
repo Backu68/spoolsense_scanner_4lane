@@ -367,8 +367,22 @@ void TFTManager::processQueue() {
 // ---------------------------------------------------------------------------
 
 void TFTManager::blitCanvas() {
+    // On wide panels clear the gutters around the centered 240x240 canvas so a
+    // prior full-screen landscape frame doesn't linger behind legacy views.
+    // (Runs inside processQueue's shared-SPI guard; no-op on 240x240 panels.)
+    if (_wide) {
+        const int W = _tft.width(), H = _tft.height();
+        if (_blitOx > 0) {
+            _tft.fillRect(0, 0, _blitOx, H, COLOR_BG);
+            _tft.fillRect(_blitOx + 240, 0, W - _blitOx - 240, H, COLOR_BG);
+        }
+        if (_blitOy > 0) {
+            _tft.fillRect(_blitOx, 0, 240, _blitOy, COLOR_BG);
+            _tft.fillRect(_blitOx, _blitOy + 240, 240, H - _blitOy - 240, COLOR_BG);
+        }
+    }
     // 240x240 sprite pushed at the panel-aware origin: (0,0) on 240x240 panels,
-    // centered on wide panels (ILI9488) which were cleared to black at init.
+    // centered on wide panels (ILI9488).
     _sprite.pushSprite(_blitOx, _blitOy);
 }
 
