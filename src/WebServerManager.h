@@ -69,6 +69,13 @@ private:
     void handleApiGetConfig();
     void handleApiPostConfig();
     void handleApiDiagnostics();
+
+    // Self-test wizard (#253)
+    void handleApiSelfTestStart();
+    void handleApiSelfTestStatus();
+    void handleApiSelfTestInput();
+    void handleApiSelfTestCancel();
+    void handleApiSelfTestReport();
     void handleTroubleshootingPage();
     void handleUIDRegistrationPage();
     void handleApiRegisterUid();

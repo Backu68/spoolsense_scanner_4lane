@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <cstring>
 #include "openprinttag_lib.h"
+#include "DiagnosticsTypes.h"
 
 // Interface for NFC hardware abstraction
 // Allows injection of test stubs without #ifdef guards
@@ -61,6 +62,16 @@ public:
 
     // Log hardware-specific diagnostic info (register dumps, etc.). Default: no-op.
     virtual void logDiagnostics() {}
+
+    // Fill a structured reader status snapshot for the self-test wizard (#253).
+    // Base implementation provides only the reader name; hardware backends
+    // override to add firmware/register/SAM detail. Must be called while the
+    // scan task is paused so it does not race the reader on the SPI bus.
+    virtual bool getDiagnosticSnapshot(ReaderDiagnostics& out) {
+        memset(&out, 0, sizeof(out));
+        getReaderInfo(out.reader_name, sizeof(out.reader_name));
+        return true;
+    }
 };
 
 #endif // NFC_CONNECTION_I_H

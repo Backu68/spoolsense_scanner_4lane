@@ -576,6 +576,10 @@ void PN5180::clearBusWedged() {
   pn5180_busWedged = false;
 }
 
+bool PN5180::isBusWedged() {
+  return pn5180_busWedged;
+}
+
 bool PN5180::transceiveCommand(uint8_t *sendBuffer, size_t sendBufferLen, uint8_t *recvBuffer, size_t recvBufferLen) {
   if (pn5180_busWedged) return false;
 #ifdef DEBUG

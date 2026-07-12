@@ -149,6 +149,9 @@ public:
   // Clear the bus-wedged fail-fast latch after a hardware reset
   static void clearBusWedged();
 
+  // Read the bus-wedged fail-fast latch state (for diagnostics).
+  static bool isBusWedged();
+
 private:
   bool transceiveCommand(uint8_t *sendBuffer, size_t sendBufferLen, uint8_t *recvBuffer = 0, size_t recvBufferLen = 0);
 
