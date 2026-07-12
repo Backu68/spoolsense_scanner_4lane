@@ -10,23 +10,14 @@
 #include <WiFiClientSecure.h>
 
 #include "MemoryDiagnostics.h"
-#include "LandingHTML.h"
-#include "OpenPrintTagWriterHTML.h"
-#include "ReaderHTML.h"
-#include "TigerTagWriterHTML.h"
-#include "OpenTag3DWriterHTML.h"
-#include "SharedCSS.h"
-#include "SharedJS.h"
-#include "ConfigHTML.h"
-#include "TroubleshootingHTML.h"
-#include "UIDRegistrationHTML.h"
+// Text UI assets (HTML/CSS/JS) are served pre-gzipped from generated PROGMEM
+// byte arrays; the readable source lives in src/*HTML.h / src/Shared*.h and is
+// compiled into WebAssetsGz.h by scripts/gen_gzip_assets.py at build time.
+#include "gen/WebAssetsGz.h"
 #include "OpenPrintTagLogo.h"
 #include "TigerTagLogo.h"
 #include "OpenTag3DLogo.h"
 #include "OpenSpoolLogo.h"
-#include "OpenSpoolWriterHTML.h"
-#include "UpdateHTML.h"
-#include "LogViewerHTML.h"
 #include "LogBuffer.h"
 #include "ConfigurationManager.h"
 #include "NFCManager.h"
@@ -202,38 +193,44 @@ void WebServerManager::handleClient() {
 // Page handlers
 // ---------------------------------------------------------------------------
 
+void WebServerManager::sendGzip(int code, const char* contentType,
+                                const uint8_t* data, size_t len) {
+    _server.sendHeader("Content-Encoding", "gzip");
+    _server.send_P(code, contentType, reinterpret_cast<const char*>(data), len);
+}
+
 void WebServerManager::handleLanding() {
-    _server.send_P(200, "text/html", LANDING_HTML);
+    sendGzip(200, "text/html", LANDING_HTML_GZ, LANDING_HTML_GZ_LEN);
 }
 
 void WebServerManager::handleReader() {
-    _server.send_P(200, "text/html", READER_HTML);
+    sendGzip(200, "text/html", READER_HTML_GZ, READER_HTML_GZ_LEN);
 }
 
 void WebServerManager::handleOpenPrintTagWriter() {
-    _server.send_P(200, "text/html", OPENPRINTTAG_WRITER_HTML);
+    sendGzip(200, "text/html", OPENPRINTTAG_WRITER_HTML_GZ, OPENPRINTTAG_WRITER_HTML_GZ_LEN);
 }
 
 void WebServerManager::handleTigerTagWriter() {
-    _server.send_P(200, "text/html", TIGERTAG_WRITER_HTML);
+    sendGzip(200, "text/html", TIGERTAG_WRITER_HTML_GZ, TIGERTAG_WRITER_HTML_GZ_LEN);
 }
 
 void WebServerManager::handleOpenTag3DWriter() {
-    _server.send_P(200, "text/html", OPENTAG3D_WRITER_HTML);
+    sendGzip(200, "text/html", OPENTAG3D_WRITER_HTML_GZ, OPENTAG3D_WRITER_HTML_GZ_LEN);
 }
 
 void WebServerManager::handleOpenSpoolWriter() {
-    _server.send_P(200, "text/html", OPENSPOOL_WRITER_HTML);
+    sendGzip(200, "text/html", OPENSPOOL_WRITER_HTML_GZ, OPENSPOOL_WRITER_HTML_GZ_LEN);
 }
 
 void WebServerManager::handleSharedCSS() {
     _server.sendHeader("Cache-Control", "no-store");
-    _server.send_P(200, "text/css", SHARED_CSS);
+    sendGzip(200, "text/css", SHARED_CSS_GZ, SHARED_CSS_GZ_LEN);
 }
 
 void WebServerManager::handleSharedJS() {
     _server.sendHeader("Cache-Control", "no-store");
-    _server.send_P(200, "application/javascript", SHARED_JS);
+    sendGzip(200, "application/javascript", SHARED_JS_GZ, SHARED_JS_GZ_LEN);
 }
 
 void WebServerManager::handleOpenPrintTagLogo() {
@@ -257,23 +254,23 @@ void WebServerManager::handleOpenSpoolLogo() {
 }
 
 void WebServerManager::handleUpdatePage() {
-    _server.send_P(200, "text/html", UPDATE_HTML);
+    sendGzip(200, "text/html", UPDATE_HTML_GZ, UPDATE_HTML_GZ_LEN);
 }
 
 void WebServerManager::handleConfigPage() {
-    _server.send_P(200, "text/html", CONFIG_HTML);
+    sendGzip(200, "text/html", CONFIG_HTML_GZ, CONFIG_HTML_GZ_LEN);
 }
 
 void WebServerManager::handleTroubleshootingPage() {
-    _server.send_P(200, "text/html", TROUBLESHOOTING_HTML);
+    sendGzip(200, "text/html", TROUBLESHOOTING_HTML_GZ, TROUBLESHOOTING_HTML_GZ_LEN);
 }
 
 void WebServerManager::handleUIDRegistrationPage() {
-    _server.send_P(200, "text/html", UID_REGISTRATION_HTML);
+    sendGzip(200, "text/html", UID_REGISTRATION_HTML_GZ, UID_REGISTRATION_HTML_GZ_LEN);
 }
 
 void WebServerManager::handleLogViewer() {
-    _server.send_P(200, "text/html", LOG_VIEWER_HTML);
+    sendGzip(200, "text/html", LOG_VIEWER_HTML_GZ, LOG_VIEWER_HTML_GZ_LEN);
 }
 
 void WebServerManager::handleApiLogs() {
@@ -886,6 +883,20 @@ void WebServerManager::handleApiGetConfig() {
     }
     doc["tft_enabled"] = cfg.tft_enabled;
     doc["tft_driver"] = cfg.tft_driver;
+    {
+        // NFC pin overrides (#201): "" = board default; *_default carries the
+        // effective default so the page can show it as the placeholder
+        static const char* keys[6] = {"pin_nfc_rst","pin_nfc_nss","pin_nfc_busy",
+                                      "pin_nfc_sck","pin_nfc_mosi","pin_nfc_miso"};
+        auto& cm = ConfigurationManager::getInstance();
+        for (int i = 0; i < 6; i++) {
+            char defKey[24];
+            snprintf(defKey, sizeof(defKey), "%s_default", keys[i]);
+            if (cfg.nfc_pins[i] == LED_PIN_DEFAULT) doc[keys[i]] = "";
+            else doc[keys[i]] = cfg.nfc_pins[i];
+            doc[defKey] = cm.getNfcPin((NfcPinId)i);
+        }
+    }
     doc["ap_mode"] = _apMode;
     if (_apMode) {
         extern char g_apSSID[];
@@ -963,6 +974,22 @@ void WebServerManager::handleApiPostConfig() {
             long p = strtol(ledPinStr, &end, 10);
             bool numeric = (end != ledPinStr) && (*end == '\0');
             update.led_pin = (numeric && p >= 0 && p <= 254) ? (uint8_t)p : LED_PIN_DEFAULT;
+        }
+    }
+    {
+        // NFC pin overrides (#201): same string convention as led_pin
+        static const char* keys[6] = {"pin_nfc_rst","pin_nfc_nss","pin_nfc_busy",
+                                      "pin_nfc_sck","pin_nfc_mosi","pin_nfc_miso"};
+        for (int i = 0; i < 6; i++) {
+            const char* s = doc[keys[i]] | "";
+            if (s[0] == '\0') {
+                update.nfc_pins[i] = LED_PIN_DEFAULT;
+                continue;
+            }
+            char* end = nullptr;
+            long p = strtol(s, &end, 10);
+            bool numeric = (end != s) && (*end == '\0');
+            update.nfc_pins[i] = (numeric && p >= 0 && p <= 254) ? (uint8_t)p : LED_PIN_DEFAULT;
         }
     }
 
