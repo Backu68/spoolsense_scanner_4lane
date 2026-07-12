@@ -253,6 +253,22 @@ const char CONFIG_HTML[] PROGMEM = R"rawliteral(
                        aria-labelledby="led_pin_label"
                        style="width:150px;padding:6px 10px;border-radius:6px;border:1px solid var(--border);background:var(--card);color:var(--text);font-size:0.95em" />
               </div>
+
+              <div class="field">
+                <details>
+                  <summary style="cursor:pointer;color:var(--accent);font-size:0.95em">NFC Reader Pins (advanced)</summary>
+                  <div class="hint" style="margin:8px 0">Remap the reader wiring for boards with different pinouts (blank = board default). Values are validated and conflicting sets revert to defaults. Changes apply after the device restarts on save. <strong>Wrong pins stop the reader from working until corrected.</strong></div>
+                  <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px">
+                    <label style="font-size:0.85em">RST<input id="pin_nfc_rst" type="number" min="0" max="48" style="width:100%"/></label>
+                    <label style="font-size:0.85em">NSS/SS<input id="pin_nfc_nss" type="number" min="0" max="48" style="width:100%"/></label>
+                    <label style="font-size:0.85em">BUSY<input id="pin_nfc_busy" type="number" min="0" max="48" style="width:100%"/></label>
+                    <label style="font-size:0.85em">SCK<input id="pin_nfc_sck" type="number" min="0" max="48" style="width:100%"/></label>
+                    <label style="font-size:0.85em">MOSI<input id="pin_nfc_mosi" type="number" min="0" max="48" style="width:100%"/></label>
+                    <label style="font-size:0.85em">MISO<input id="pin_nfc_miso" type="number" min="0" max="48" style="width:100%"/></label>
+                  </div>
+                  <div class="hint" style="margin-top:6px">BUSY applies to PN5180 only; PN532 uses RST/NSS + SPI pins.</div>
+                </details>
+              </div>
               <div class="toggle-row">
                 <span id="keypad_enabled_label" class="toggle-label">3x4 Matrix Keypad</span>
                 <label class="toggle-switch">
@@ -333,6 +349,14 @@ const char CONFIG_HTML[] PROGMEM = R"rawliteral(
       document.getElementById('lcd_enabled').checked = !!cfg.lcd_enabled;
       document.getElementById('led_enabled').checked = !!cfg.led_enabled;
       if (cfg.led_pin !== undefined && cfg.led_pin !== '') document.getElementById('led_pin').value = cfg.led_pin;
+      ['rst','nss','busy','sck','mosi','miso'].forEach(function(p){
+        var el = document.getElementById('pin_nfc_' + p);
+        if (!el) return;
+        var v = cfg['pin_nfc_' + p];
+        if (v !== undefined && v !== '') el.value = v;
+        var d = cfg['pin_nfc_' + p + '_default'];
+        if (d !== undefined) el.placeholder = d;
+      });
       document.getElementById('keypad_enabled').checked = !!cfg.keypad_enabled;
       document.getElementById('tft_enabled').checked = !!cfg.tft_enabled;
       if (cfg.tft_driver) document.getElementById('tft_driver').value = cfg.tft_driver;
@@ -422,6 +446,12 @@ const char CONFIG_HTML[] PROGMEM = R"rawliteral(
         lcd_enabled: document.getElementById('lcd_enabled').checked ? 1 : 0,
         led_enabled: document.getElementById('led_enabled').checked ? 1 : 0,
         led_pin: document.getElementById('led_pin').value.trim(),
+        pin_nfc_rst: document.getElementById('pin_nfc_rst').value.trim(),
+        pin_nfc_nss: document.getElementById('pin_nfc_nss').value.trim(),
+        pin_nfc_busy: document.getElementById('pin_nfc_busy').value.trim(),
+        pin_nfc_sck: document.getElementById('pin_nfc_sck').value.trim(),
+        pin_nfc_mosi: document.getElementById('pin_nfc_mosi').value.trim(),
+        pin_nfc_miso: document.getElementById('pin_nfc_miso').value.trim(),
         keypad_enabled: document.getElementById('keypad_enabled').checked ? 1 : 0,
         tft_enabled: document.getElementById('tft_enabled').checked ? 1 : 0,
         tft_driver: document.getElementById('tft_driver').value,

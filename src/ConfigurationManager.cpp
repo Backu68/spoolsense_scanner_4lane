@@ -42,6 +42,16 @@ static const char* NVS_KEY_U1_CHANNEL    = "u1_channel";
 static const char* NVS_KEY_U1_MODE       = "u1_mode";
 static const char* NVS_KEY_U1_AUTOPICK   = "u1_autopick";
 static const char* NVS_KEY_LED_PIN       = "led_pin";
+// NfcPinId order: rst, nss, busy, sck, mosi, miso
+static const char* NVS_KEYS_NFC_PIN[6] = {
+    "pin_nfc_rst", "pin_nfc_nss", "pin_nfc_busy",
+    "pin_nfc_sck", "pin_nfc_mosi", "pin_nfc_miso",
+};
+static const int16_t NFC_PIN_DEFAULTS[6] = {
+    PIN_PN5180_RST, PIN_PN5180_NSS, PIN_PN5180_BUSY,
+    PIN_PN5180_SCK, PIN_PN5180_MOSI, PIN_PN5180_MISO,
+};
+static const char* NFC_PIN_NAMES[6] = { "RST", "NSS", "BUSY", "SCK", "MOSI", "MISO" };
 
 // Sanitize hostname: enforce mDNS naming constraints (lowercase alphanum + hyphens,
 // no leading/trailing hyphens) and reject empty strings to avoid boot-time errors.
@@ -63,6 +73,36 @@ void sanitizeHostname(char* buf, size_t cap) {
     }
     strncpy(buf, out, cap - 1);
     buf[cap - 1] = '\0';
+}
+
+// Board-level GPIO validity — shared by every runtime pin override (#201,
+// #203). Blocklists are selected by the same BOARD_* flags as BoardPins.h.
+static bool boardPinUsable(uint8_t pin) {
+    bool valid;
+#if defined(BOARD_ESP32_C3)
+    // C3 exposes only GPIO 0-21; flash (12-17), USB-serial (18-19) and straps
+    // (2,8,9) are unusable, so validate against the known-good allowlist.
+    switch (pin) {
+        case 0: case 1: case 3: case 4: case 5: case 6: case 7:
+        case 10: case 20: case 21:
+            valid = true; break;
+        default:
+            valid = false; break;
+    }
+#elif defined(BOARD_ESP32_S3)
+    // S3: reject straps/USB-JTAG (0,3,19,20), SPI flash (26-32), straps (45,46).
+    valid = !(pin == 0 || pin == 3 || pin == 19 || pin == 20 ||
+              (pin >= 26 && pin <= 32) || pin == 45 || pin == 46 || pin > 48);
+  #if defined(BOARD_S3_DEVKITC)
+    // N16R8 octal PSRAM additionally claims GPIO 33-37.
+    if (pin >= 33 && pin <= 37) valid = false;
+  #endif
+#else
+    // ESP32 WROOM: reject straps (0,2,12,15), SPI flash (6-11), input-only (34-39).
+    valid = !(pin == 0 || pin == 2 || (pin >= 6 && pin <= 11) || pin == 12 ||
+              pin == 15 || (pin >= 34 && pin <= 39) || pin > 39);
+#endif
+    return valid;
 }
 
 // Reject GPIOs that can't safely drive the status LED on the CURRENT board and
@@ -90,32 +130,7 @@ static uint8_t sanitizeLedPin(uint8_t pin) {
         }
     }
 
-    bool valid;
-#if defined(BOARD_ESP32_C3)
-    // C3 exposes only GPIO 0-21; flash (12-17), USB-serial (18-19) and straps
-    // (2,8,9) are unusable, so validate against the known-good allowlist.
-    switch (pin) {
-        case 0: case 1: case 3: case 4: case 5: case 6: case 7:
-        case 10: case 20: case 21:
-            valid = true; break;
-        default:
-            valid = false; break;
-    }
-#elif defined(BOARD_ESP32_S3)
-    // S3: reject straps/USB-JTAG (0,3,19,20), SPI flash (26-32), straps (45,46).
-    valid = !(pin == 0 || pin == 3 || pin == 19 || pin == 20 ||
-              (pin >= 26 && pin <= 32) || pin == 45 || pin == 46 || pin > 48);
-  #if defined(BOARD_S3_DEVKITC)
-    // N16R8 octal PSRAM additionally claims GPIO 33-37.
-    if (pin >= 33 && pin <= 37) valid = false;
-  #endif
-#else
-    // ESP32 WROOM: reject straps (0,2,12,15), SPI flash (6-11), input-only (34-39).
-    valid = !(pin == 0 || pin == 2 || (pin >= 6 && pin <= 11) || pin == 12 ||
-              pin == 15 || (pin >= 34 && pin <= 39) || pin > 39);
-#endif
-
-    if (!valid) {
+    if (!boardPinUsable(pin)) {
         Serial.printf("ConfigurationManager: led_pin %u invalid for this board, using default GPIO %u\n",
                       (unsigned)pin, (unsigned)PIN_STATUS_LED);
         return LED_PIN_DEFAULT;
@@ -157,6 +172,76 @@ static uint8_t rejectFeaturePins(uint8_t pin, bool lcdOn, bool tftOn, bool keypa
         }
     }
     return pin;
+}
+
+// Validate an NFC pin override SET (#201). Per-pin: board-usable or revert to
+// sentinel. Then set-wide: the six EFFECTIVE pins (override-or-default) must
+// be distinct and must not collide with enabled-feature pins or the status
+// LED; any collision reverts the whole set — a half-applied remap is a wiring
+// short waiting to happen, and defaults are always safe.
+static void sanitizeNfcPinSet(uint8_t pins[6], bool lcdOn, bool tftOn, bool keypadOn,
+                              uint8_t effectiveLedPin) {
+    for (int i = 0; i < 6; i++) {
+        if (pins[i] == LED_PIN_DEFAULT) continue;
+        if (!boardPinUsable(pins[i])) {
+            Serial.printf("ConfigurationManager: NFC %s pin %u invalid for this board, using default\n",
+                          NFC_PIN_NAMES[i], (unsigned)pins[i]);
+            pins[i] = LED_PIN_DEFAULT;
+        }
+    }
+
+    int16_t effective[6];
+    for (int i = 0; i < 6; i++) {
+        effective[i] = (pins[i] == LED_PIN_DEFAULT) ? NFC_PIN_DEFAULTS[i] : (int16_t)pins[i];
+    }
+
+    bool conflict = false;
+    for (int i = 0; i < 6 && !conflict; i++) {
+        for (int j = i + 1; j < 6; j++) {
+            if (effective[i] >= 0 && effective[i] == effective[j]) {
+                Serial.printf("ConfigurationManager: NFC pin conflict — %s and %s both GPIO %d\n",
+                              NFC_PIN_NAMES[i], NFC_PIN_NAMES[j], (int)effective[i]);
+                conflict = true;
+                break;
+            }
+        }
+    }
+
+    struct OtherPin { int16_t pin; bool active; const char* what; };
+    const OtherPin others[] = {
+        { PIN_LCD_SDA,     lcdOn,    "LCD" },
+        { PIN_LCD_SCL,     lcdOn,    "LCD" },
+        { PIN_TFT_MOSI,    tftOn,    "TFT" },
+        { PIN_TFT_SCLK,    tftOn,    "TFT" },
+        { PIN_TFT_CS,      tftOn,    "TFT" },
+        { PIN_TFT_DC,      tftOn,    "TFT" },
+        { PIN_TFT_RST,     tftOn,    "TFT" },
+        { PIN_TFT_BL,      tftOn,    "TFT" },
+        { PIN_KEYPAD_ROW1, keypadOn, "keypad" },
+        { PIN_KEYPAD_ROW2, keypadOn, "keypad" },
+        { PIN_KEYPAD_ROW3, keypadOn, "keypad" },
+        { PIN_KEYPAD_ROW4, keypadOn, "keypad" },
+        { PIN_KEYPAD_COL1, keypadOn, "keypad" },
+        { PIN_KEYPAD_COL2, keypadOn, "keypad" },
+        { PIN_KEYPAD_COL3, keypadOn, "keypad" },
+        { (int16_t)effectiveLedPin, true, "status LED" },
+    };
+    for (int i = 0; i < 6 && !conflict; i++) {
+        if (pins[i] == LED_PIN_DEFAULT) continue;  // defaults pre-date the features; only police overrides
+        for (const auto& o : others) {
+            if (o.active && o.pin >= 0 && effective[i] == o.pin) {
+                Serial.printf("ConfigurationManager: NFC %s pin %d is in use by the enabled %s\n",
+                              NFC_PIN_NAMES[i], (int)effective[i], o.what);
+                conflict = true;
+                break;
+            }
+        }
+    }
+
+    if (conflict) {
+        Serial.println("ConfigurationManager: reverting ALL NFC pin overrides to board defaults");
+        for (int i = 0; i < 6; i++) pins[i] = LED_PIN_DEFAULT;
+    }
 }
 
 ConfigurationManager& ConfigurationManager::getInstance() {
@@ -381,6 +466,20 @@ bool ConfigurationManager::loadFromNVS() {
         anyOverride = true;
     }
 
+    {
+        bool anyNfcPin = false;
+        for (int i = 0; i < 6; i++) {
+            if (prefs.isKey(NVS_KEYS_NFC_PIN[i])) {
+                _nfcPins[i] = prefs.getUChar(NVS_KEYS_NFC_PIN[i], LED_PIN_DEFAULT);
+                anyNfcPin = true;
+            }
+        }
+        if (anyNfcPin) {
+            sanitizeNfcPinSet(_nfcPins, _lcdEnabled, _tftEnabled, _keypadEnabled, getLedPin());
+            anyOverride = true;
+        }
+    }
+
     prefs.end();
     return anyOverride;
 }
@@ -510,6 +609,13 @@ uint8_t ConfigurationManager::getLedPin() const {
     return (_ledPin == LED_PIN_DEFAULT) ? PIN_STATUS_LED : _ledPin;
 }
 
+uint8_t ConfigurationManager::getNfcPin(NfcPinId id) const {
+    uint8_t i = (uint8_t)id;
+    if (i >= 6) return 0;
+    if (_nfcPins[i] != LED_PIN_DEFAULT) return _nfcPins[i];
+    return (uint8_t)NFC_PIN_DEFAULTS[i];
+}
+
 void ConfigurationManager::getCurrentConfig(ConfigUpdate& out) const {
     memset(&out, 0, sizeof(out));
     strncpy(out.wifi_ssid, _ssid, sizeof(out.wifi_ssid) - 1);
@@ -540,6 +646,7 @@ void ConfigurationManager::getCurrentConfig(ConfigUpdate& out) const {
     out.u1_mode = _u1Mode;
     out.u1_auto_pick = _u1AutoPick ? 1 : 0;
     out.led_pin = _ledPin;
+    memcpy(out.nfc_pins, _nfcPins, sizeof(out.nfc_pins));
 }
 
 #ifndef NATIVE_TEST
@@ -589,11 +696,23 @@ bool ConfigurationManager::saveToNVS(const ConfigUpdate& update) {
     prefs.putUChar(NVS_KEY_U1_CHANNEL, (update.u1_channel <= 3) ? update.u1_channel : 0);
     prefs.putUChar(NVS_KEY_U1_MODE, (update.u1_mode <= 1) ? update.u1_mode : 0);
     prefs.putBool(NVS_KEY_U1_AUTOPICK, update.u1_auto_pick != 0);
+    uint8_t savedLedPin;
     {
         uint8_t ledPin = sanitizeLedPin(update.led_pin);
         ledPin = rejectFeaturePins(ledPin, update.lcd_enabled != 0,
                                    update.tft_enabled != 0, update.keypad_enabled != 0);
         prefs.putUChar(NVS_KEY_LED_PIN, ledPin);
+        savedLedPin = ledPin;
+    }
+    {
+        uint8_t pins[6];
+        memcpy(pins, update.nfc_pins, sizeof(pins));
+        uint8_t effLed = (savedLedPin == LED_PIN_DEFAULT) ? PIN_STATUS_LED : savedLedPin;
+        sanitizeNfcPinSet(pins, update.lcd_enabled != 0, update.tft_enabled != 0,
+                          update.keypad_enabled != 0, effLed);
+        for (int i = 0; i < 6; i++) {
+            prefs.putUChar(NVS_KEYS_NFC_PIN[i], pins[i]);
+        }
     }
 
     // Invalidate Spoolman enrichment cache on config change to force re-fetch
