@@ -670,12 +670,16 @@ void WebServerManager::handleApiSpoolmanPendingLink() {
 
 void WebServerManager::handleApiSelfTestStart() {
     DiagnosticsManager::Options opts;  // defaults: network + stability on
-    if (_server.hasArg("plain")) {
+    if (_server.hasArg("plain") && _server.arg("plain").length() > 0) {
         StaticJsonDocument<128> body;
-        if (!deserializeJson(body, _server.arg("plain"))) {
-            if (body.containsKey("network"))   opts.network   = body["network"].as<bool>();
-            if (body.containsKey("stability")) opts.stability = body["stability"].as<bool>();
+        // A malformed body must not silently start a full session (network
+        // checks + a scan pause window) — reject it instead.
+        if (deserializeJson(body, _server.arg("plain"))) {
+            sendError(400, "Invalid JSON");
+            return;
         }
+        if (body.containsKey("network"))   opts.network   = body["network"].as<bool>();
+        if (body.containsKey("stability")) opts.stability = body["stability"].as<bool>();
     }
     if (!DiagnosticsManager::getInstance().startSession(opts)) {
         sendError(409, "A self-test is already running");

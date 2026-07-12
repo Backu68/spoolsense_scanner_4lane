@@ -209,9 +209,18 @@ const char TROUBLESHOOTING_HTML[] PROGMEM = R"rawliteral(
           ta.focus(); ta.select();
           var ok = document.execCommand('copy');
           document.body.removeChild(ta);
-          flash(ok ? 'Copied!' : 'Press ⌘C');
+          if (ok) {
+            flash('Copied!');
+          } else {
+            // Select the visible ID so a manual Ctrl/Cmd+C actually has a target
+            var r = document.createRange();
+            r.selectNodeContents(document.getElementById('deviceId'));
+            var s = window.getSelection();
+            s.removeAllRanges(); s.addRange(r);
+            flash('Selected — press Ctrl/⌘+C');
+          }
         } catch (e) {
-          flash('Select + ⌘C');
+          flash('Select the ID, then Ctrl/⌘+C');
         }
       }
       if (navigator.clipboard && navigator.clipboard.writeText) {
@@ -439,10 +448,15 @@ const char TROUBLESHOOTING_HTML[] PROGMEM = R"rawliteral(
           sel.removeAllRanges();
           sel.addRange(range);
           var ok = document.execCommand('copy');
-          sel.removeAllRanges();
-          flash(ok ? 'Copied!' : 'Press ⌘C to copy');
+          if (ok) {
+            sel.removeAllRanges();
+            flash('Copied!');
+          } else {
+            // Leave the report selected so the manual shortcut actually works
+            flash('Selected — press Ctrl/⌘+C');
+          }
         } catch (e) {
-          flash('Select the text + ⌘C');
+          flash('Select the text, then Ctrl/⌘+C');
         }
       }
       if (navigator.clipboard && navigator.clipboard.writeText) {

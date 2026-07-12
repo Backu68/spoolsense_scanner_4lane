@@ -27,7 +27,13 @@ static constexpr uint32_t DIAG_HTTP_MUTEX_MS = 5000;
 // starve it there and freeze all HTTP to the board for the duration.
 static constexpr uint32_t DIAG_TASK_STACK = 6144;
 static constexpr UBaseType_t DIAG_TASK_PRIO = 1;
+// Single-core chips (C3 today, C6/C5 later) have no core 1 — pin to the only
+// core there so task creation can't fail at runtime.
+#if CONFIG_FREERTOS_UNICORE
+static constexpr int DIAG_TASK_CORE = 0;
+#else
 static constexpr int DIAG_TASK_CORE = 1;
+#endif
 
 // Stability run tuning.
 static constexpr uint16_t STABILITY_DETECT_CYCLES = 100;
@@ -177,7 +183,7 @@ void DiagnosticsManager::runSession() {
         addResult(DiagnosticTest::NFC_READER_INIT, DiagnosticStatus::WARNING, 0, 0,
                   "Could not pause the scan task to inspect the reader",
                   "Retry the self-test; if it persists the scan task may be stuck.");
-        nfc.resumeScan();
+        resumeScanAndWait(nfc);
         return;
     }
 
@@ -202,7 +208,21 @@ void DiagnosticsManager::runSession() {
         }
     }
 
+    resumeScanAndWait(nfc);
+}
+
+// Release the scan pause and block until the scan task has actually left its
+// pause loop. The session's `active_` flag clears right after runSession()
+// returns — without this ack, a back-to-back start could read the previous
+// session's stale scanPaused_==true, skip its own pause handshake, and drive
+// the reader concurrently with the just-resumed scan task.
+void DiagnosticsManager::resumeScanAndWait(NFCManager& nfc) {
     nfc.resumeScan();
+#ifndef NATIVE_TEST
+    for (int i = 0; i < 100 && nfc.isScanPaused(); i++) {
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+#endif
 }
 
 // --- Stage 1 checks -------------------------------------------------------
@@ -361,6 +381,13 @@ void DiagnosticsManager::checkSpoolman() {
     diagRedactUrl(safeUrl, sizeof(safeUrl), cfg.spoolman_url);
 
     bool held = g_httpMutex && (xSemaphoreTake(g_httpMutex, pdMS_TO_TICKS(DIAG_HTTP_MUTEX_MS)) == pdTRUE);
+    if (g_httpMutex && !held) {
+        // Never do unserialized outbound HTTP — that's the overlap the mutex exists to prevent.
+        addResult(DiagnosticTest::SPOOLMAN_REACHABILITY, DiagnosticStatus::WARNING, 0, 0,
+                  "Skipped — another network operation was in flight",
+                  "A Spoolman sync or printer poll held the connection; re-run the self-test.");
+        return;
+    }
     HTTPClient http;
     char infoUrl[160];
     snprintf(infoUrl, sizeof(infoUrl), "%s/api/v1/info", cfg.spoolman_url);
@@ -416,6 +443,12 @@ void DiagnosticsManager::checkPrinter() {
     diagRedactUrl(safeUrl, sizeof(safeUrl), baseUrl);
 
     bool held = g_httpMutex && (xSemaphoreTake(g_httpMutex, pdMS_TO_TICKS(DIAG_HTTP_MUTEX_MS)) == pdTRUE);
+    if (g_httpMutex && !held) {
+        addResult(DiagnosticTest::PRINTER_REACHABILITY, DiagnosticStatus::WARNING, 0, 0,
+                  "Skipped — another network operation was in flight",
+                  "A Spoolman sync or printer poll held the connection; re-run the self-test.");
+        return;
+    }
     HTTPClient http;
     char url[192];
     snprintf(url, sizeof(url), "%s%s", baseUrl, path);

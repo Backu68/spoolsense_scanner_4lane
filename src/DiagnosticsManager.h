@@ -14,6 +14,8 @@
 #include <freertos/semphr.h>
 #endif
 
+class NFCManager;
+
 class DiagnosticsManager {
 public:
     static DiagnosticsManager& getInstance();
@@ -72,6 +74,7 @@ private:
     void checkResetReason();
     void checkHeapHealth();
     void checkTaskStacks();
+    void resumeScanAndWait(NFCManager& nfc);
     void checkReaderInit();
     void checkReaderVersion();
     void checkReaderRegisters();
