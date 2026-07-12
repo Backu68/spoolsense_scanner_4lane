@@ -1,5 +1,6 @@
 #include "LCDManager.h"
 #include "MemoryDiagnostics.h"
+#include "TaskUtils.h"
 #include <Arduino.h>
 #include <cstring>
 
@@ -95,7 +96,7 @@ void LCDManager::setScreenTimeoutMs(uint32_t timeoutMs) {
 }
 
 void LCDManager::startTask() {
-    xTaskCreatePinnedToCore(
+    BaseType_t created = createTaskWithAffinity(
         taskFunc,
         "LCDTask",
         2048,
@@ -104,7 +105,12 @@ void LCDManager::startTask() {
         &_taskHandle,
         0  // core 0 avoids contention with BLE/WiFi on core 1
     );
-    Serial.println("LCDManager: Task started on core 0");
+    if (created == pdPASS) {
+        Serial.println("LCDManager: Task started");
+    } else {
+        _taskHandle = nullptr;
+        Serial.println("LCDManager: ERROR — task creation failed");
+    }
 }
 
 void LCDManager::taskFunc(void* param) {

@@ -33,6 +33,8 @@
 #ifndef PN5180_SPI_BUS
   #if CONFIG_IDF_TARGET_ESP32S3
     #define PN5180_SPI_BUS FSPI  // bus 0 = SPI2 — matches the FSPI pin naming in BoardPins.h
+  #elif CONFIG_IDF_TARGET_ESP32C3 || CONFIG_IDF_TARGET_ESP32C5 || CONFIG_IDF_TARGET_ESP32C6
+    #define PN5180_SPI_BUS FSPI  // the C3/C5/C6 expose one general-purpose SPI host
   #else
     #define PN5180_SPI_BUS HSPI  // SPI2 on classic ESP32
   #endif

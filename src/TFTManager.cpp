@@ -1,6 +1,7 @@
 #include "TFTManager.h"
 #include "ConfigurationManager.h"
 #include "MemoryDiagnostics.h"
+#include "TaskUtils.h"
 #include <Arduino.h>
 
 // TFT display controller for 240x240 ST7789 or GC9A01 (round). Manages sprite rendering to PSRAM
@@ -78,7 +79,7 @@ void TFTManager::begin() {
 void TFTManager::startTask() {
     // 8192 bytes: TFT drawing operations + sprite manipulation use more stack than simple
     // I2C LCD operations; sprite creation/pushSprite are stack-heavy due to local buffers
-    BaseType_t result = xTaskCreatePinnedToCore(
+    BaseType_t result = createTaskWithAffinity(
         taskFunc,
         "TFTTask",
         8192,

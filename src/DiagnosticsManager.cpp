@@ -14,6 +14,7 @@
 #include "ConfigurationManager.h"
 #include "HomeAssistantManager.h"
 #include "LogBuffer.h"
+#include "TaskUtils.h"
 
 // Serializes all outbound HTTP/TLS (created in main.cpp, shared with the web +
 // Spoolman + printer tasks). The network reachability checks below take it so a
@@ -27,13 +28,7 @@ static constexpr uint32_t DIAG_HTTP_MUTEX_MS = 5000;
 // starve it there and freeze all HTTP to the board for the duration.
 static constexpr uint32_t DIAG_TASK_STACK = 6144;
 static constexpr UBaseType_t DIAG_TASK_PRIO = 1;
-// Single-core chips (C3 today, C6/C5 later) have no core 1 — pin to the only
-// core there so task creation can't fail at runtime.
-#if CONFIG_FREERTOS_UNICORE
-static constexpr int DIAG_TASK_CORE = 0;
-#else
 static constexpr int DIAG_TASK_CORE = 1;
-#endif
 
 // Stability run tuning.
 static constexpr uint16_t STABILITY_DETECT_CYCLES = 100;
@@ -129,8 +124,8 @@ bool DiagnosticsManager::startSession(const Options& opts) {
     unlock();
 
 #ifndef NATIVE_TEST
-    BaseType_t ok = xTaskCreatePinnedToCore(sessionTaskFunc, "DiagTask", DIAG_TASK_STACK,
-                                            this, DIAG_TASK_PRIO, &taskHandle_, DIAG_TASK_CORE);
+    BaseType_t ok = createTaskWithAffinity(sessionTaskFunc, "DiagTask", DIAG_TASK_STACK,
+                                           this, DIAG_TASK_PRIO, &taskHandle_, DIAG_TASK_CORE);
     if (ok != pdPASS) {
         active_ = false;
         return false;

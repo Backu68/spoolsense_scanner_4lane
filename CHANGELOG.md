@@ -1,5 +1,16 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- **ESP32-C6 and ESP32-C5 DevKitC-1 targets** — firmware environments, validated board pin maps, onboard RGB LED support, CI builds, and release artifacts. Both targets support PN5180/PN532 NFC, I2C LCD, and the full network/web feature set; TFT and keypad are intentionally disabled because the single general-purpose SPI bus is reserved for NFC.
+
+### Changed
+
+- **Arduino-ESP32 3.3.9 / ESP-IDF 5.5.4 migration** — PlatformIO now uses the exact pioarduino `55.03.39` release. Task creation is unicore-safe on C3/C5/C6, the NFC watchdog uses the IDF 5 reconfiguration API with checked errors, and WiFi dependencies are included explicitly for Arduino 3.x.
+- **LovyanGFX 1.2.21** — updated the exact pin for Arduino 3.x compatibility on TFT-capable legacy targets. C5/C6 omit the library entirely until shared-SPI TFT support is implemented.
+
 ## [1.8.3] - 2026-07-11
 
 ### Security

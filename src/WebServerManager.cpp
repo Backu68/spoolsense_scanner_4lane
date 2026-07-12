@@ -1,6 +1,9 @@
 #include "WebServerManager.h"
+#include "TaskUtils.h"
 
 #ifndef NATIVE_TEST
+
+#include <WiFi.h>
 
 #include <Arduino.h>
 #include <ESPmDNS.h>
@@ -1126,7 +1129,7 @@ void WebServerManager::handleApiUpdateFromUrl() {
     _otaError[0] = '\0';
 
     Serial.printf("OTA: Free heap before task: %u\n", ESP.getFreeHeap());
-    BaseType_t created = xTaskCreatePinnedToCore(otaDownloadTask, "OTATask", 24576, this, 2, nullptr, 0);
+    BaseType_t created = createTaskWithAffinity(otaDownloadTask, "OTATask", 24576, this, 2, nullptr, 0);
     if (created != pdPASS) {
         _otaState = OtaState::IDLE;
         sendError(500, "Failed to start OTA task");

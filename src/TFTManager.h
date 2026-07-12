@@ -1,5 +1,42 @@
 #pragma once
 
+#if defined(BOARD_NO_TFT)
+
+#include <Arduino.h>
+#include "DisplayI.h"
+
+// C5/C6 have one general-purpose SPI bus, reserved for NFC. Keeping a tiny
+// compile-time stub lets shared application code remain board-agnostic while
+// the build omits LovyanGFX and all TFT implementation objects.
+enum class TFTDriver : uint8_t { ST7789, GC9A01, ILI9341, ILI9488 };
+
+class TFTManager : public DisplayI {
+public:
+    explicit TFTManager(TFTDriver = TFTDriver::ST7789) {}
+    void begin() {}
+    void startTask() {}
+    void showBoot(const char*) {}
+    void showWifiConnecting() {}
+    void showWifiConnected(const char*) {}
+    void showReady() {}
+    void showSpoolScanned(const DisplaySpoolData&) {}
+    void showWriting(const char*) {}
+    void showWriteResult(bool, const char*) override {}
+    void showKeypadEntry(const char*) {}
+    void showError(const char*) {}
+    void freeForOTA() override {}
+    void updateOTAProgress(uint8_t) override {}
+    void showOTAError(const char*) override {}
+    void setScreenTimeoutMs(uint32_t) override {}
+    void showText(const char*, const char* = nullptr) override {}
+    void showText4(const char*, const char*, const char*, const char*) override {}
+    void showSpool(const DisplaySpoolData&) override {}
+    void showKeypad(const char*) override {}
+    void showTrayDashboard(const TrayDashboardState&) override {}
+};
+
+#else
+
 #include <Arduino.h>
 #include <LovyanGFX.hpp>
 #include "BoardPins.h"
@@ -124,3 +161,5 @@ private:
     static constexpr uint32_t DEFAULT_SCREEN_TIMEOUT_MS = 30000;
     static constexpr uint32_t BREATH_STEP_MS = 20;
 };
+
+#endif // BOARD_NO_TFT

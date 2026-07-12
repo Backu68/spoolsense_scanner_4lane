@@ -79,7 +79,28 @@ void sanitizeHostname(char* buf, size_t cap) {
 // #203). Blocklists are selected by the same BOARD_* flags as BoardPins.h.
 static bool boardPinUsable(uint8_t pin) {
     bool valid;
-#if defined(BOARD_ESP32_C3)
+#if defined(BOARD_ESP32_C6)
+    // C6 DevKitC-1: reject USB (12/13) and straps (4/5/9/15). GPIO8 is the
+    // onboard WS2812 and is safe once reset-time strap sampling has completed.
+    switch (pin) {
+        case 0: case 1: case 2: case 3: case 6: case 7: case 8:
+        case 10: case 11: case 16: case 17: case 18: case 19:
+        case 20: case 21: case 22: case 23:
+            valid = true; break;
+        default:
+            valid = false; break;
+    }
+#elif defined(BOARD_ESP32_C5)
+    // C5 DevKitC-1 v1.2: reject USB (13/14), straps (2/3/7/25/26/28), and
+    // GPIO15 because it is not exposed on every module/board revision.
+    switch (pin) {
+        case 0: case 1: case 4: case 5: case 6: case 8: case 9:
+        case 10: case 11: case 12: case 23: case 24: case 27:
+            valid = true; break;
+        default:
+            valid = false; break;
+    }
+#elif defined(BOARD_ESP32_C3)
     // C3 exposes only GPIO 0-21; flash (12-17), USB-serial (18-19) and straps
     // (2,8,9) are unusable, so validate against the known-good allowlist.
     switch (pin) {
@@ -266,6 +287,13 @@ bool ConfigurationManager::begin() {
     }
 #endif
 
+#if defined(BOARD_NO_TFT)
+    _tftEnabled = false;
+#endif
+#if defined(BOARD_NO_KEYPAD)
+    _keypadEnabled = false;
+#endif
+
     _initialized = true;
     return true;
 }
@@ -418,6 +446,10 @@ bool ConfigurationManager::loadFromNVS() {
         _tftEnabled = prefs.getUChar(NVS_KEY_TFT_ON, _tftEnabled ? 1 : 0) != 0;
         anyOverride = true;
     }
+#if defined(BOARD_NO_TFT)
+    // C5/C6 dedicate their only general-purpose SPI host to NFC.
+    _tftEnabled = false;
+#endif
     if (prefs.isKey(NVS_KEY_TFT_DRIVER)) {
         prefs.getString(NVS_KEY_TFT_DRIVER, _tftDriver, sizeof(_tftDriver));
         anyOverride = true;
@@ -674,8 +706,16 @@ bool ConfigurationManager::saveToNVS(const ConfigUpdate& update) {
     prefs.putUChar(NVS_KEY_AUTO_MODE, update.auto_mode);
     prefs.putUChar(NVS_KEY_LCD_ON, update.lcd_enabled);
     prefs.putUChar(NVS_KEY_LED_ON, update.led_enabled);
+#if defined(BOARD_NO_KEYPAD)
+    prefs.putUChar(NVS_KEY_KEYPAD_ON, 0);
+#else
     prefs.putUChar(NVS_KEY_KEYPAD_ON, update.keypad_enabled);
+#endif
+#if defined(BOARD_NO_TFT)
+    prefs.putUChar(NVS_KEY_TFT_ON, 0);
+#else
     prefs.putUChar(NVS_KEY_TFT_ON, update.tft_enabled);
+#endif
     prefs.putString(NVS_KEY_TFT_DRIVER, update.tft_driver);
     prefs.putString(NVS_KEY_MOONRAKER_URL, update.moonraker_url);
     prefs.putBool(NVS_KEY_PRUSALINK_ON, update.prusalink_on != 0);
@@ -696,11 +736,21 @@ bool ConfigurationManager::saveToNVS(const ConfigUpdate& update) {
     prefs.putUChar(NVS_KEY_U1_CHANNEL, (update.u1_channel <= 3) ? update.u1_channel : 0);
     prefs.putUChar(NVS_KEY_U1_MODE, (update.u1_mode <= 1) ? update.u1_mode : 0);
     prefs.putBool(NVS_KEY_U1_AUTOPICK, update.u1_auto_pick != 0);
+#if defined(BOARD_NO_TFT)
+    constexpr bool tftOn = false;
+#else
+    const bool tftOn = update.tft_enabled != 0;
+#endif
+#if defined(BOARD_NO_KEYPAD)
+    constexpr bool keypadOn = false;
+#else
+    const bool keypadOn = update.keypad_enabled != 0;
+#endif
     uint8_t savedLedPin;
     {
         uint8_t ledPin = sanitizeLedPin(update.led_pin);
         ledPin = rejectFeaturePins(ledPin, update.lcd_enabled != 0,
-                                   update.tft_enabled != 0, update.keypad_enabled != 0);
+                                   tftOn, keypadOn);
         prefs.putUChar(NVS_KEY_LED_PIN, ledPin);
         savedLedPin = ledPin;
     }
@@ -708,8 +758,7 @@ bool ConfigurationManager::saveToNVS(const ConfigUpdate& update) {
         uint8_t pins[6];
         memcpy(pins, update.nfc_pins, sizeof(pins));
         uint8_t effLed = (savedLedPin == LED_PIN_DEFAULT) ? PIN_STATUS_LED : savedLedPin;
-        sanitizeNfcPinSet(pins, update.lcd_enabled != 0, update.tft_enabled != 0,
-                          update.keypad_enabled != 0, effLed);
+        sanitizeNfcPinSet(pins, update.lcd_enabled != 0, tftOn, keypadOn, effLed);
         for (int i = 0; i < 6; i++) {
             prefs.putUChar(NVS_KEYS_NFC_PIN[i], pins[i]);
         }

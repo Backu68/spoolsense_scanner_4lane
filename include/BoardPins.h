@@ -84,6 +84,82 @@
   #define PIN_TFT_RST        9
   #define PIN_TFT_BL        -1
 
+#elif defined(BOARD_ESP32_C6)
+  // --- ESP32-C6-DevKitC-1 pin mapping ---
+  // NFC uses the sole general-purpose SPI controller. GPIO 12/13 remain free
+  // for native USB; straps 4/5/9/15 are avoided. TFT/keypad are unsupported.
+  #define PIN_PN5180_SCK   6
+  #define PIN_PN5180_MOSI  7
+  #define PIN_PN5180_MISO  2
+  #define PIN_PN5180_NSS   10
+  #define PIN_PN5180_BUSY  1
+  #define PIN_PN5180_RST   0
+  #define PIN_PN5180_GPIO  3
+  #define PIN_PN5180_IRQ   11
+  #define PIN_PN5180_AUX   18
+  #define PIN_PN532_SCK    PIN_PN5180_SCK
+  #define PIN_PN532_MOSI   PIN_PN5180_MOSI
+  #define PIN_PN532_MISO   PIN_PN5180_MISO
+  #define PIN_PN532_SS     PIN_PN5180_NSS
+  #define PIN_PN532_IRQ    PIN_PN5180_IRQ
+  #define PIN_PN532_RST    PIN_PN5180_RST
+  #define PIN_LCD_SDA      20
+  #define PIN_LCD_SCL      21
+  // Onboard WS2812. GPIO8 is a strap, but Espressif's board circuit is safe
+  // and the firmware does not drive it until after reset sampling completes.
+  #define PIN_STATUS_LED   8
+  #define PIN_KEYPAD_ROW1  -1
+  #define PIN_KEYPAD_ROW2  -1
+  #define PIN_KEYPAD_ROW3  -1
+  #define PIN_KEYPAD_ROW4  -1
+  #define PIN_KEYPAD_COL1  -1
+  #define PIN_KEYPAD_COL2  -1
+  #define PIN_KEYPAD_COL3  -1
+  #define PIN_TFT_MOSI     -1
+  #define PIN_TFT_SCLK     -1
+  #define PIN_TFT_MISO     -1
+  #define PIN_TFT_CS       -1
+  #define PIN_TFT_DC       -1
+  #define PIN_TFT_RST      -1
+  #define PIN_TFT_BL       -1
+
+#elif defined(BOARD_ESP32_C5)
+  // --- ESP32-C5-DevKitC-1 v1.2 pin mapping ---
+  // NFC uses the sole general-purpose SPI controller. GPIO 13/14 remain free
+  // for native USB; straps 2/3/7/25/26/28 are avoided. GPIO27 is the board LED.
+  #define PIN_PN5180_SCK   6
+  #define PIN_PN5180_MOSI  8
+  #define PIN_PN5180_MISO  9
+  #define PIN_PN5180_NSS   10
+  #define PIN_PN5180_BUSY  1
+  #define PIN_PN5180_RST   0
+  #define PIN_PN5180_GPIO  4
+  #define PIN_PN5180_IRQ   5
+  #define PIN_PN5180_AUX   23
+  #define PIN_PN532_SCK    PIN_PN5180_SCK
+  #define PIN_PN532_MOSI   PIN_PN5180_MOSI
+  #define PIN_PN532_MISO   PIN_PN5180_MISO
+  #define PIN_PN532_SS     PIN_PN5180_NSS
+  #define PIN_PN532_IRQ    PIN_PN5180_IRQ
+  #define PIN_PN532_RST    PIN_PN5180_RST
+  #define PIN_LCD_SDA      24
+  #define PIN_LCD_SCL      11
+  #define PIN_STATUS_LED   27
+  #define PIN_KEYPAD_ROW1  -1
+  #define PIN_KEYPAD_ROW2  -1
+  #define PIN_KEYPAD_ROW3  -1
+  #define PIN_KEYPAD_ROW4  -1
+  #define PIN_KEYPAD_COL1  -1
+  #define PIN_KEYPAD_COL2  -1
+  #define PIN_KEYPAD_COL3  -1
+  #define PIN_TFT_MOSI     -1
+  #define PIN_TFT_SCLK     -1
+  #define PIN_TFT_MISO     -1
+  #define PIN_TFT_CS       -1
+  #define PIN_TFT_DC       -1
+  #define PIN_TFT_RST      -1
+  #define PIN_TFT_BL       -1
+
 #elif defined(BOARD_ESP32_C3)
   // --- ESP32-C3 SuperMini pin mapping (HORNAXYS, Waveshare, etc.) ---
   // Scoped variant: NFC SPI reader + I2C LCD + WS2812 only. No TFT, no keypad.

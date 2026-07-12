@@ -122,7 +122,7 @@ public:
     }
 };
 
-#else // WROOM or C3
+#else // WROOM or single-SPI C3/C5/C6
 
 class LGFX : public lgfx::LGFX_Device {
     lgfx::Panel_ST7789  _panel_st7789;
@@ -138,8 +138,8 @@ public:
         // out of scope for C3 builds but LGFX must still link, so fall back to SPI2.
         {
             auto cfg = _bus_instance.config();
-#if defined(BOARD_ESP32_C3)
-            cfg.spi_host   = SPI2_HOST;  // C3 only has SPI2 — TFT not supported at runtime
+#if defined(BOARD_ESP32_C3) || defined(BOARD_ESP32_C5) || defined(BOARD_ESP32_C6)
+            cfg.spi_host   = SPI2_HOST;  // Single-SPI targets: TFT is unsupported at runtime
 #else
             cfg.spi_host   = VSPI_HOST;
 #endif
