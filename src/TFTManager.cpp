@@ -280,9 +280,6 @@ void TFTManager::processQueue() {
         _isBreathing = false;  // stop any prior breathing when new message arrives
         taskEXIT_CRITICAL(&_stateMux);
 
-        _currentState = msg.state;   // drives the idle status-bar refresh
-        _lastStatusRefreshMs = millis();
-
         SharedSPIBus::Guard busGuard;
         if (!busGuard) {
             Serial.println("TFTManager: shared SPI render lock timed out; frame dropped");
@@ -336,6 +333,11 @@ void TFTManager::processQueue() {
                     _dashboard.render(&_sprite, msg.dashboardState, _blitOx, _blitOy);
                     break;
             }
+            // Commit state only after a successful (guarded) render, so the idle
+            // status-bar refresh never paints a header over a screen that failed
+            // to render (dropped frame on a lock timeout).
+            _currentState = msg.state;
+            _lastStatusRefreshMs = millis();
         }
     }
 
@@ -544,7 +546,9 @@ void TFTManager::drawStatusBar(LGFX_Sprite& canvas, int yOffset) {
 
     int cy = Y(L.headerH / 2);
     int x = 480 - 8;  // right-to-left cursor
-    if (ConfigurationManager::getInstance().getMoonrakerURL()[0] != '\0') {
+    // PRN only when the PrusaLink printer integration is enabled — that is what
+    // PrinterManager::isConnected() actually reflects.
+    if (ConfigurationManager::getInstance().isPrusaLinkEnabled()) {
         bool ok = PrinterManager::getInstance().isConnected();
         canvas.setTextDatum(MR_DATUM);
         canvas.setTextColor(ok ? COLOR_BAR_FG : COLOR_SPOOL_RIM);
@@ -676,7 +680,10 @@ void TFTManager::renderReadyLandscape() {
 // Repaint only the top status band (cheap, ~24KB strip) so idle status stays
 // live without re-rendering the whole screen. Takes its own shared-SPI guard.
 void TFTManager::refreshStatusBar() {
-    if (_screenOff) return;
+    taskENTER_CRITICAL(&_stateMux);
+    bool off = _screenOff;
+    taskEXIT_CRITICAL(&_stateMux);
+    if (off) return;
     SharedSPIBus::Guard g;
     if (!g) return;
     LandscapeLayout L = landscapeLayout(480, 320);
