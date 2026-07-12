@@ -22,9 +22,12 @@ extern SemaphoreHandle_t g_httpMutex;
 static constexpr uint32_t DIAG_HTTP_MUTEX_MS = 5000;
 
 // Worker task sizing. Low priority so it never starves the scan/web tasks.
+// Pinned to core 1 (APP_CPU) alongside the scan/loop tasks — NOT core 0, which
+// runs the WiFi/lwIP stack: the stability loop's ~735ms detectTag bursts would
+// starve it there and freeze all HTTP to the board for the duration.
 static constexpr uint32_t DIAG_TASK_STACK = 6144;
 static constexpr UBaseType_t DIAG_TASK_PRIO = 1;
-static constexpr int DIAG_TASK_CORE = 0;
+static constexpr int DIAG_TASK_CORE = 1;
 
 // Stability run tuning.
 static constexpr uint16_t STABILITY_DETECT_CYCLES = 100;
@@ -549,7 +552,9 @@ void DiagnosticsManager::runStabilityStage() {
             }
         }
 #ifndef NATIVE_TEST
-        vTaskDelay(pdMS_TO_TICKS(5));
+        // Yield generously so the web server (shares core 1) stays responsive
+        // during the run — the scan task uses a similar gap for the same reason.
+        vTaskDelay(pdMS_TO_TICKS(15));
 #endif
     }
     conn->endTagSession();
