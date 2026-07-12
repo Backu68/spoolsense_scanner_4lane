@@ -128,6 +128,9 @@ private:
     void renderReady();
     void renderSpoolScanned(const DisplaySpoolData& spool);
     void renderSpoolScannedLandscape(const DisplaySpoolData& spool);  // ILI9488 480x320
+    void renderReadyLandscape();                                      // ILI9488 idle screen
+    void renderLandscapeFrame(const DisplaySpoolData* spool);         // shared backend (nullptr=idle)
+    void refreshStatusBar();                                          // periodic header-only update
     void renderStatus(const char* line1, const char* line2 = nullptr);
     void renderWriteResult(bool success, const char* tagFormat);
     void renderKeypadEntry(const char* toolNumber);
@@ -140,6 +143,10 @@ private:
     // Draw the full 480x320 landscape layout into any canvas, shifting all Y by
     // -yOffset (so one function fills a full sprite or a strip band).
     void drawLandscapeSpool(LGFX_Sprite& canvas, int yOffset, const DisplaySpoolData& spool);
+    void drawLandscapeReady(LGFX_Sprite& canvas, int yOffset);                 // idle body
+    void drawStatusBar(LGFX_Sprite& canvas, int yOffset);                       // shared top bar
+    void drawSpoolOn(LGFX_Sprite& canvas, int cx, int cy, int oR, int iR, uint32_t fill);
+    void drawWifiBars(LGFX_Sprite& canvas, int x, int y, int rssi, bool connected);
     uint32_t hexToRgb(const char* hex);
     uint32_t dimColor(uint32_t color, uint8_t brightness); // for low-spool breathing
 
@@ -154,6 +161,8 @@ private:
     bool _wide = false;   // panel larger than 240x240 (ILI9488) — landscape-capable
     int  _blitOx = 0;     // centered-blit origin for the 240x240 sprite on wide panels
     int  _blitOy = 0;
+    TFTState _currentState = TFTState::Boot;   // last-rendered state (drives idle status refresh)
+    unsigned long _lastStatusRefreshMs = 0;    // throttles the periodic status-bar redraw
 
     uint32_t _screenTimeoutMs;
     unsigned long _lastActivityMs;
@@ -170,6 +179,7 @@ private:
 
     static constexpr uint32_t DEFAULT_SCREEN_TIMEOUT_MS = 30000;
     static constexpr uint32_t BREATH_STEP_MS = 20;
+    static constexpr uint32_t STATUS_REFRESH_MS = 4000;  // idle status-bar redraw interval
 };
 
 #endif // BOARD_NO_TFT

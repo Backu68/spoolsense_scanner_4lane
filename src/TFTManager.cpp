@@ -3,6 +3,9 @@
 #include "MemoryDiagnostics.h"
 #include "SharedSPIBus.h"
 #include "TaskUtils.h"
+#include "HomeAssistantManager.h"
+#include "PrinterManager.h"
+#include <WiFi.h>
 #include <Arduino.h>
 
 // TFT display controller for 240x240 ST7789 or GC9A01 (round). Manages sprite rendering to PSRAM
@@ -277,6 +280,9 @@ void TFTManager::processQueue() {
         _isBreathing = false;  // stop any prior breathing when new message arrives
         taskEXIT_CRITICAL(&_stateMux);
 
+        _currentState = msg.state;   // drives the idle status-bar refresh
+        _lastStatusRefreshMs = millis();
+
         SharedSPIBus::Guard busGuard;
         if (!busGuard) {
             Serial.println("TFTManager: shared SPI render lock timed out; frame dropped");
@@ -293,7 +299,11 @@ void TFTManager::processQueue() {
                     renderStatus(msg.statusText, msg.statusText2[0] ? msg.statusText2 : nullptr);
                     break;
                 case TFTState::Ready:
-                    renderReady();
+                    if (_driver == TFTDriver::ILI9488) {
+                        renderReadyLandscape();
+                    } else {
+                        renderReady();
+                    }
                     break;
                 case TFTState::SpoolScanned:
                     // Breathing animation for low-weight spools (< 100g): visual cue for respool
@@ -339,6 +349,15 @@ void TFTManager::processQueue() {
         _breathBrightness = (uint8_t)next;
         SharedSPIBus::Guard busGuard;
         if (busGuard) _tft.setBrightness(_breathBrightness);
+    }
+
+    // Keep the idle status bar live: on wide panels, while showing the Ready
+    // screen, repaint just the header band every few seconds so WiFi/HA/printer
+    // changes appear without a scan. (Cheap header-only strip; own bus guard.)
+    if (_wide && _currentState == TFTState::Ready &&
+        (millis() - _lastStatusRefreshMs >= STATUS_REFRESH_MS)) {
+        _lastStatusRefreshMs = millis();
+        refreshStatusBar();
     }
 
     // Screen timeout: turn off after inactivity period if configured (timeoutMs > 0)
@@ -479,24 +498,8 @@ void TFTManager::renderSpoolScanned(const DisplaySpoolData& spool) {
     blitCanvas();
 }
 
-void TFTManager::drawLandscapeSpool(LGFX_Sprite& canvas, int yOffset,
-                                    const DisplaySpoolData& spool) {
-    const int W = 480, H = 320;
-    LandscapeLayout L = landscapeLayout(W, H);
-    auto Y = [&](int y){ return y - yOffset; };
-
-    // Header
-    canvas.fillRect(0, Y(0), W, L.headerH, COLOR_HEADER_BG);
-    canvas.setTextColor(COLOR_ACCENT);
-    canvas.setTextSize(1);
-    canvas.setTextDatum(ML_DATUM);
-    canvas.drawString("SpoolSense", 6, Y(L.headerH / 2));
-    canvas.setTextDatum(MR_DATUM);
-    canvas.drawString("NFC+", W - 6, Y(L.headerH / 2));
-
-    // Spool disc (canvas-aware copy of drawSpool)
-    uint32_t fill = hexToRgb(spool.colorHex);
-    int cx = L.spoolCx, cy = Y(L.spoolCy), oR = L.spoolOuterR, iR = L.spoolInnerR;
+// Canvas-aware spool disc (shared by the scanned + idle landscape bodies).
+void TFTManager::drawSpoolOn(LGFX_Sprite& canvas, int cx, int cy, int oR, int iR, uint32_t fill) {
     canvas.fillCircle(cx + 3, cy + 3, oR, 0x111111);
     canvas.fillCircle(cx, cy, oR, COLOR_SPOOL_RIM);
     canvas.fillCircle(cx, cy, oR - 5, fill);
@@ -509,6 +512,82 @@ void TFTManager::drawLandscapeSpool(LGFX_Sprite& canvas, int yOffset,
     }
     canvas.drawCircle(cx, cy, oR, 0x666666);
     canvas.fillCircle(cx, cy, 4, 0x888888);
+}
+
+// 4-bar WiFi signal indicator; baseline at y, bars grow upward.
+void TFTManager::drawWifiBars(LGFX_Sprite& canvas, int x, int y, int rssi, bool connected) {
+    int level = 0;
+    if (connected) {
+        if (rssi >= -55) level = 4;
+        else if (rssi >= -67) level = 3;
+        else if (rssi >= -78) level = 2;
+        else level = 1;
+    }
+    const int bw = 3, gap = 2;
+    for (int i = 0; i < 4; i++) {
+        int h = 4 + i * 3;  // 4,7,10,13
+        uint32_t col = (i < level) ? COLOR_ACCENT : COLOR_SPOOL_RIM;
+        canvas.fillRect(x + i * (bw + gap), y - h, bw, h, col);
+    }
+}
+
+// Shared top bar: "SpoolSense" + WiFi/HA/Printer status. Status is queried live
+// (bool reads / WiFi calls are safe from the TFT task).
+void TFTManager::drawStatusBar(LGFX_Sprite& canvas, int yOffset) {
+    LandscapeLayout L = landscapeLayout(480, 320);
+    auto Y = [&](int y){ return y - yOffset; };
+    canvas.fillRect(0, Y(0), 480, L.headerH, COLOR_HEADER_BG);
+    canvas.setTextColor(COLOR_ACCENT);
+    canvas.setTextSize(1);
+    canvas.setTextDatum(ML_DATUM);
+    canvas.drawString("SpoolSense", 6, Y(L.headerH / 2));
+
+    int cy = Y(L.headerH / 2);
+    int x = 480 - 8;  // right-to-left cursor
+    if (ConfigurationManager::getInstance().getMoonrakerURL()[0] != '\0') {
+        bool ok = PrinterManager::getInstance().isConnected();
+        canvas.setTextDatum(MR_DATUM);
+        canvas.setTextColor(ok ? COLOR_BAR_FG : COLOR_SPOOL_RIM);
+        canvas.drawString("PRN", x, cy);
+        x -= 30;
+    }
+    {
+        bool ok = HomeAssistantManager::getInstance().isConnected();
+        canvas.setTextDatum(MR_DATUM);
+        canvas.setTextColor(ok ? COLOR_BAR_FG : COLOR_SPOOL_RIM);
+        canvas.drawString("HA", x, cy);
+        x -= 24;
+    }
+    bool wifiUp = (WiFi.status() == WL_CONNECTED);
+    drawWifiBars(canvas, x - 20, Y(L.headerH - 6), wifiUp ? (int)WiFi.RSSI() : -127, wifiUp);
+}
+
+// Scanned-spool body (no header — the frame draws the shared status bar).
+void TFTManager::drawLandscapeSpool(LGFX_Sprite& canvas, int yOffset,
+                                    const DisplaySpoolData& spool) {
+    const int W = 480, H = 320;
+    LandscapeLayout L = landscapeLayout(W, H);
+    auto Y = [&](int y){ return y - yOffset; };
+
+    drawSpoolOn(canvas, L.spoolCx, Y(L.spoolCy), L.spoolOuterR, L.spoolInnerR,
+                hexToRgb(spool.colorHex));
+
+    // Tag-type badge (top-right of body, below the status bar)
+    const char* tagLabel = nullptr; uint32_t tagColor = COLOR_SUBTEXT;
+    switch (spool.tagType) {
+        case TAG_TYPE_OPENPRINTTAG: tagLabel = "OpenPrintTag"; tagColor = 0x4FC3F7; break;
+        case TAG_TYPE_TIGERTAG:     tagLabel = "TigerTag";     tagColor = 0xFF9800; break;
+        case TAG_TYPE_OPENTAG3D:    tagLabel = "OpenTag3D";    tagColor = 0x4CAF50; break;
+        case TAG_TYPE_BAMBU:        tagLabel = "Bambu";        tagColor = 0x1DB954; break;
+        case TAG_TYPE_NFC_PLAIN:    tagLabel = "NFC+";         tagColor = 0x00BCD4; break;
+        case TAG_TYPE_OPENSPOOL:    tagLabel = "OpenSpool";    tagColor = 0xE91E63; break;
+    }
+    if (tagLabel) {
+        canvas.setTextDatum(MR_DATUM);
+        canvas.setTextColor(tagColor);
+        canvas.setTextSize(1);
+        canvas.drawString(tagLabel, W - 8, Y(L.headerH + 12));
+    }
 
     // Right column text
     canvas.setTextDatum(ML_DATUM);
@@ -536,7 +615,21 @@ void TFTManager::drawLandscapeSpool(LGFX_Sprite& canvas, int yOffset,
     }
 }
 
-void TFTManager::renderSpoolScannedLandscape(const DisplaySpoolData& spool) {
+// Idle body (no header): grey spool + prompt.
+void TFTManager::drawLandscapeReady(LGFX_Sprite& canvas, int yOffset) {
+    const int W = 480, H = 320;
+    LandscapeLayout L = landscapeLayout(W, H);
+    auto Y = [&](int y){ return y - yOffset; };
+    drawSpoolOn(canvas, W / 2, Y(L.spoolCy), L.spoolOuterR, L.spoolInnerR, COLOR_SPOOL_RIM);
+    canvas.setTextDatum(MC_DATUM);
+    canvas.setTextColor(COLOR_SUBTEXT);
+    canvas.setTextSize(1);
+    canvas.drawString("Tap a spool to scan", W / 2, Y(H - 22));
+}
+
+// Shared landscape backend: PSRAM -> one full 480x320 16-bit sprite; no-PSRAM ->
+// a reused 32-row RGB565 strip drawn band-by-band. spool==nullptr renders idle.
+void TFTManager::renderLandscapeFrame(const DisplaySpoolData* spool) {
     const int W = 480, H = 320;
 
     if (psramFound()) {
@@ -545,7 +638,9 @@ void TFTManager::renderSpoolScannedLandscape(const DisplaySpoolData& spool) {
         full.setColorDepth(16);
         if (full.createSprite(W, H)) {
             full.fillScreen(COLOR_BG);
-            drawLandscapeSpool(full, 0, spool);
+            drawStatusBar(full, 0);
+            if (spool) drawLandscapeSpool(full, 0, *spool);
+            else       drawLandscapeReady(full, 0);
             full.pushSprite(0, 0);
             full.deleteSprite();
             return;
@@ -553,7 +648,6 @@ void TFTManager::renderSpoolScannedLandscape(const DisplaySpoolData& spool) {
         Serial.println("TFT: PSRAM landscape sprite failed, using strips");
     }
 
-    // No-PSRAM strip path: 480 x STRIP_H RGB565 (~30KB at 32 rows)
     const int STRIP_H = 32;
     LGFX_Sprite strip(&_tft);
     strip.setColorDepth(16);
@@ -563,10 +657,36 @@ void TFTManager::renderSpoolScannedLandscape(const DisplaySpoolData& spool) {
     }
     for (int bandY = 0; bandY < H; bandY += STRIP_H) {
         strip.fillScreen(COLOR_BG);
-        drawLandscapeSpool(strip, bandY, spool);
+        drawStatusBar(strip, bandY);
+        if (spool) drawLandscapeSpool(strip, bandY, *spool);
+        else       drawLandscapeReady(strip, bandY);
         strip.pushSprite(0, bandY);
     }
     strip.deleteSprite();
+}
+
+void TFTManager::renderSpoolScannedLandscape(const DisplaySpoolData& spool) {
+    renderLandscapeFrame(&spool);
+}
+
+void TFTManager::renderReadyLandscape() {
+    renderLandscapeFrame(nullptr);
+}
+
+// Repaint only the top status band (cheap, ~24KB strip) so idle status stays
+// live without re-rendering the whole screen. Takes its own shared-SPI guard.
+void TFTManager::refreshStatusBar() {
+    if (_screenOff) return;
+    SharedSPIBus::Guard g;
+    if (!g) return;
+    LandscapeLayout L = landscapeLayout(480, 320);
+    LGFX_Sprite bar(&_tft);
+    bar.setColorDepth(16);
+    if (!bar.createSprite(480, L.headerH)) return;
+    bar.fillScreen(COLOR_BG);
+    drawStatusBar(bar, 0);
+    bar.pushSprite(0, 0);
+    bar.deleteSprite();
 }
 
 void TFTManager::renderStatus(const char* line1, const char* line2) {
