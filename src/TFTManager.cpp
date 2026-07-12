@@ -304,7 +304,11 @@ void TFTManager::processQueue() {
                         _breathBrightness = 255;
                         _breathDirection = -1;  // start dimming
                     }
-                    renderSpoolScanned(msg.spool);
+                    if (_driver == TFTDriver::ILI9488) {
+                        renderSpoolScannedLandscape(msg.spool);
+                    } else {
+                        renderSpoolScanned(msg.spool);
+                    }
                     break;
                 case TFTState::Writing:
                     renderStatus("Writing...", msg.statusText);
@@ -459,6 +463,96 @@ void TFTManager::renderSpoolScanned(const DisplaySpoolData& spool) {
     }
 
     blitCanvas();
+}
+
+void TFTManager::drawLandscapeSpool(LGFX_Sprite& canvas, int yOffset,
+                                    const DisplaySpoolData& spool) {
+    const int W = 480, H = 320;
+    LandscapeLayout L = landscapeLayout(W, H);
+    auto Y = [&](int y){ return y - yOffset; };
+
+    // Header
+    canvas.fillRect(0, Y(0), W, L.headerH, COLOR_HEADER_BG);
+    canvas.setTextColor(COLOR_ACCENT);
+    canvas.setTextSize(1);
+    canvas.setTextDatum(ML_DATUM);
+    canvas.drawString("SpoolSense", 6, Y(L.headerH / 2));
+    canvas.setTextDatum(MR_DATUM);
+    canvas.drawString("NFC+", W - 6, Y(L.headerH / 2));
+
+    // Spool disc (canvas-aware copy of drawSpool)
+    uint32_t fill = hexToRgb(spool.colorHex);
+    int cx = L.spoolCx, cy = Y(L.spoolCy), oR = L.spoolOuterR, iR = L.spoolInnerR;
+    canvas.fillCircle(cx + 3, cy + 3, oR, 0x111111);
+    canvas.fillCircle(cx, cy, oR, COLOR_SPOOL_RIM);
+    canvas.fillCircle(cx, cy, oR - 5, fill);
+    canvas.fillCircle(cx, cy, iR, COLOR_SPOOL_HUB);
+    for (int i = 0; i < 6; i++) {
+        float a = i * (float)(M_PI / 3.0);
+        int x1 = cx + (int)(cosf(a) * (iR - 2)), y1 = cy + (int)(sinf(a) * (iR - 2));
+        int x2 = cx + (int)(cosf(a) * (oR - 8)), y2 = cy + (int)(sinf(a) * (oR - 8));
+        canvas.drawLine(x1, y1, x2, y2, COLOR_SPOOL_RIM);
+    }
+    canvas.drawCircle(cx, cy, oR, 0x666666);
+    canvas.fillCircle(cx, cy, 4, 0x888888);
+
+    // Right column text
+    canvas.setTextDatum(ML_DATUM);
+    canvas.setTextColor(COLOR_TEXT);
+    canvas.setTextSize(2);
+    canvas.drawString(spool.brand[0] ? spool.brand : "Unknown", L.textX, Y(L.brandY));
+    canvas.setTextSize(1);
+    char line[48];
+    snprintf(line, sizeof(line), "%s  #%s", spool.material, spool.colorHex);
+    canvas.setTextColor(COLOR_SUBTEXT);
+    canvas.drawString(line, L.textX, Y(L.materialY));
+
+    if (spool.totalWeight > 0) {
+        snprintf(line, sizeof(line), "%.0fg / %.0fg",
+                 spool.remainingWeight, spool.totalWeight);
+        canvas.setTextColor(COLOR_TEXT);
+        canvas.drawString(line, L.textX, Y(L.weightY));
+        const LandscapeRect& b = L.weightBar;
+        int filled = landscapeBarFill(b.w, spool.remainingWeight, spool.totalWeight);
+        float ratio = spool.remainingWeight / spool.totalWeight;
+        uint32_t barColor = (ratio <= 0.1f) ? COLOR_BAR_LOW : COLOR_BAR_FG;
+        canvas.fillRoundRect(b.x, Y(b.y), b.w, b.h, b.h / 2, COLOR_BAR_BG);
+        if (filled > 0) canvas.fillRoundRect(b.x, Y(b.y), filled, b.h, b.h / 2, barColor);
+        canvas.drawRoundRect(b.x, Y(b.y), b.w, b.h, b.h / 2, 0x555555);
+    }
+}
+
+void TFTManager::renderSpoolScannedLandscape(const DisplaySpoolData& spool) {
+    const int W = 480, H = 320;
+
+    if (psramFound()) {
+        LGFX_Sprite full(&_tft);
+        full.setPsram(true);
+        full.setColorDepth(16);
+        if (full.createSprite(W, H)) {
+            full.fillScreen(COLOR_BG);
+            drawLandscapeSpool(full, 0, spool);
+            full.pushSprite(0, 0);
+            full.deleteSprite();
+            return;
+        }
+        Serial.println("TFT: PSRAM landscape sprite failed, using strips");
+    }
+
+    // No-PSRAM strip path: 480 x STRIP_H RGB565 (~30KB at 32 rows)
+    const int STRIP_H = 32;
+    LGFX_Sprite strip(&_tft);
+    strip.setColorDepth(16);
+    if (!strip.createSprite(W, STRIP_H)) {
+        Serial.println("TFT: landscape strip alloc failed");
+        return;
+    }
+    for (int bandY = 0; bandY < H; bandY += STRIP_H) {
+        strip.fillScreen(COLOR_BG);
+        drawLandscapeSpool(strip, bandY, spool);
+        strip.pushSprite(0, bandY);
+    }
+    strip.deleteSprite();
 }
 
 void TFTManager::renderStatus(const char* line1, const char* line2) {

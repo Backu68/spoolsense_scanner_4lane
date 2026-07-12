@@ -44,6 +44,7 @@ public:
 #include "DisplayI.h"
 #include "TrayDashboardTypes.h"
 #include "TFTDashboard.h"
+#include "TFTLandscapeLayout.h"
 
 // Tag type constants — one icon per type
 #define TAG_TYPE_UNKNOWN      0
@@ -126,6 +127,7 @@ private:
     void renderBoot(const char* version);
     void renderReady();
     void renderSpoolScanned(const DisplaySpoolData& spool);
+    void renderSpoolScannedLandscape(const DisplaySpoolData& spool);  // ILI9488 480x320
     void renderStatus(const char* line1, const char* line2 = nullptr);
     void renderWriteResult(bool success, const char* tagFormat);
     void renderKeypadEntry(const char* toolNumber);
@@ -135,6 +137,9 @@ private:
     void drawWeightBar(int x, int y, int w, int h, float remaining, float total);
     void drawTagIcon(uint8_t tagType, int x, int y);
     void blitCanvas();  // push _sprite at the panel-aware (centered on wide panels) origin
+    // Draw the full 480x320 landscape layout into any canvas, shifting all Y by
+    // -yOffset (so one function fills a full sprite or a strip band).
+    void drawLandscapeSpool(LGFX_Sprite& canvas, int yOffset, const DisplaySpoolData& spool);
     uint32_t hexToRgb(const char* hex);
     uint32_t dimColor(uint32_t color, uint8_t brightness); // for low-spool breathing
 
