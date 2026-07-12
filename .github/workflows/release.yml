@@ -27,39 +27,49 @@ jobs:
       - name: Copy example config for build
         run: cp include/UserConfig.example.h include/UserConfig.h
 
-      - name: Build ESP32-WROOM firmware
-        run: pio run -e esp32dev
+      # Build each env and stage its artifacts IMMEDIATELY. Building all four
+      # first and copying at the end let a later env's build evict the earliest
+      # env's firmware.bin from the runner (silent, no ENOSPC) — copy while fresh.
+      - name: Build + stage ESP32-WROOM
+        run: |
+          pio run -e esp32dev
+          mkdir -p release
+          cp .pio/build/esp32dev/firmware.bin   release/spoolsense_scanner_esp32dev.bin
+          cp .pio/build/esp32dev/bootloader.bin release/bootloader_esp32dev.bin
+          cp .pio/build/esp32dev/partitions.bin release/partitions_esp32dev.bin
 
-      - name: Build ESP32-S3-Zero firmware
-        run: pio run -e esp32s3zero
+      - name: Build + stage ESP32-S3-Zero
+        run: |
+          pio run -e esp32s3zero
+          cp .pio/build/esp32s3zero/firmware.bin   release/spoolsense_scanner_esp32s3zero.bin
+          cp .pio/build/esp32s3zero/bootloader.bin release/bootloader_esp32s3zero.bin
+          cp .pio/build/esp32s3zero/partitions.bin release/partitions_esp32s3zero.bin
 
-      - name: Build ESP32-S3-DevKitC firmware
-        run: pio run -e esp32s3devkitc
+      - name: Build + stage ESP32-S3-DevKitC
+        run: |
+          pio run -e esp32s3devkitc
+          cp .pio/build/esp32s3devkitc/firmware.bin   release/spoolsense_scanner_esp32s3devkitc.bin
+          cp .pio/build/esp32s3devkitc/bootloader.bin release/bootloader_esp32s3devkitc.bin
+          cp .pio/build/esp32s3devkitc/partitions.bin release/partitions_esp32s3devkitc.bin
 
-      - name: Build ESP32-C3 firmware
-        run: pio run -e esp32c3
+      - name: Build + stage ESP32-C3
+        run: |
+          pio run -e esp32c3
+          cp .pio/build/esp32c3/firmware.bin   release/spoolsense_scanner_esp32c3.bin
+          cp .pio/build/esp32c3/bootloader.bin release/bootloader_esp32c3.bin
+          cp .pio/build/esp32c3/partitions.bin release/partitions_esp32c3.bin
 
       - name: Prepare release artifacts
         run: |
-          mkdir -p release
-          cp .pio/build/esp32dev/firmware.bin release/spoolsense_scanner_esp32dev.bin
-          cp .pio/build/esp32s3zero/firmware.bin release/spoolsense_scanner_esp32s3zero.bin
-          cp .pio/build/esp32s3devkitc/firmware.bin release/spoolsense_scanner_esp32s3devkitc.bin
-          cp .pio/build/esp32c3/firmware.bin release/spoolsense_scanner_esp32c3.bin
-          cp .pio/build/esp32dev/bootloader.bin release/bootloader_esp32dev.bin
-          cp .pio/build/esp32s3zero/bootloader.bin release/bootloader_esp32s3zero.bin
-          cp .pio/build/esp32s3devkitc/bootloader.bin release/bootloader_esp32s3devkitc.bin
-          cp .pio/build/esp32c3/bootloader.bin release/bootloader_esp32c3.bin
-          cp .pio/build/esp32dev/partitions.bin release/partitions_esp32dev.bin
-          cp .pio/build/esp32s3zero/partitions.bin release/partitions_esp32s3zero.bin
-          cp .pio/build/esp32s3devkitc/partitions.bin release/partitions_esp32s3devkitc.bin
-          cp .pio/build/esp32c3/partitions.bin release/partitions_esp32c3.bin
+          # All firmware/bootloader/partition .bins were staged as each env
+          # built; here we just add the checksums and partition schema.
           # Integrity sidecars — the installer (v1.4.0+) verifies downloads
           # against these and fails closed on mismatch (#227)
           cd release
           for f in *.bin; do sha256sum "$f" > "$f.sha256"; done
           cd ..
           cp partitions.csv release/partitions.csv
+          ls -l release/
 
       - name: Extract changelog for this version
         id: changelog
