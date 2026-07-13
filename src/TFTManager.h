@@ -129,6 +129,7 @@ private:
     void renderSpoolScanned(const DisplaySpoolData& spool);
     void renderSpoolScannedLandscape(const DisplaySpoolData& spool);  // ILI9488 480x320
     void renderReadyLandscape();                                      // ILI9488 idle screen
+    void renderTextLandscape(const char* l1, const char* l2, uint32_t l1Color);  // ILI9488 status text
     void renderLandscapeFrame(const DisplaySpoolData* spool);         // shared backend (nullptr=idle)
     void refreshStatusBar();                                          // periodic header-only update
     void renderStatus(const char* line1, const char* line2 = nullptr);
@@ -144,6 +145,8 @@ private:
     // -yOffset (so one function fills a full sprite or a strip band).
     void drawLandscapeSpool(LGFX_Sprite& canvas, int yOffset, const DisplaySpoolData& spool);
     void drawLandscapeReady(LGFX_Sprite& canvas, int yOffset);                 // idle body
+    void drawLandscapeText(LGFX_Sprite& canvas, int yOffset,
+                           const char* line1, const char* line2, uint32_t line1Color);  // status text body
     void drawStatusBar(LGFX_Sprite& canvas, int yOffset);                       // shared top bar
     // Tinted 3D spool image: coil takes `tint` (brightness-gated), reel stays
     // neutral. (cx,cy) is the screen-space center; yOffset is the strip band.

@@ -291,10 +291,16 @@ void TFTManager::processQueue() {
 
             switch (msg.state) {
                 case TFTState::Boot:
-                    renderBoot(msg.statusText);
+                    if (_driver == TFTDriver::ILI9488)
+                        renderTextLandscape("SpoolSense", msg.statusText, COLOR_ACCENT);
+                    else
+                        renderBoot(msg.statusText);
                     break;
                 case TFTState::WifiConnecting:
-                    renderStatus(msg.statusText, msg.statusText2[0] ? msg.statusText2 : nullptr);
+                    if (_driver == TFTDriver::ILI9488)
+                        renderTextLandscape(msg.statusText, msg.statusText2[0] ? msg.statusText2 : nullptr, COLOR_TEXT);
+                    else
+                        renderStatus(msg.statusText, msg.statusText2[0] ? msg.statusText2 : nullptr);
                     break;
                 case TFTState::Ready:
                     if (_driver == TFTDriver::ILI9488) {
@@ -319,16 +325,30 @@ void TFTManager::processQueue() {
                     }
                     break;
                 case TFTState::Writing:
-                    renderStatus("Writing...", msg.statusText);
+                    if (_driver == TFTDriver::ILI9488)
+                        renderTextLandscape("Writing...", msg.statusText, COLOR_TEXT);
+                    else
+                        renderStatus("Writing...", msg.statusText);
                     break;
                 case TFTState::WriteResult:
-                    renderWriteResult(msg.writeSuccess, msg.statusText);
+                    if (_driver == TFTDriver::ILI9488)
+                        renderTextLandscape(msg.writeSuccess ? "Success" : "Write Failed",
+                                            msg.statusText,
+                                            msg.writeSuccess ? COLOR_BAR_FG : COLOR_BAR_LOW);
+                    else
+                        renderWriteResult(msg.writeSuccess, msg.statusText);
                     break;
                 case TFTState::KeypadEntry:
-                    renderKeypadEntry(msg.statusText);
+                    if (_driver == TFTDriver::ILI9488)
+                        renderTextLandscape("Tool", msg.statusText, COLOR_ACCENT);
+                    else
+                        renderKeypadEntry(msg.statusText);
                     break;
                 case TFTState::Error:
-                    renderStatus("Error", msg.statusText);
+                    if (_driver == TFTDriver::ILI9488)
+                        renderTextLandscape("Error", msg.statusText, COLOR_BAR_LOW);
+                    else
+                        renderStatus("Error", msg.statusText);
                     break;
                 case TFTState::TrayDashboard:
                     _dashboard.render(&_sprite, msg.dashboardState, _blitOx, _blitOy);
@@ -692,6 +712,56 @@ void TFTManager::renderSpoolScannedLandscape(const DisplaySpoolData& spool) {
 
 void TFTManager::renderReadyLandscape() {
     renderLandscapeFrame(nullptr);
+}
+
+// Centered status text body (scan-progress / write-result screens), FreeFonts.
+void TFTManager::drawLandscapeText(LGFX_Sprite& canvas, int yOffset,
+                                   const char* line1, const char* line2, uint32_t line1Color) {
+    const int W = 480, H = 320;
+    LandscapeLayout L = landscapeLayout(W, H);
+    auto Y = [&](int y){ return y - yOffset; };
+    int mid = L.headerH + (H - L.headerH) / 2;
+    bool two = line2 && line2[0];
+    canvas.setTextDatum(MC_DATUM);
+    if (line1 && line1[0]) {
+        canvas.setFont(&fonts::FreeSansBold12pt7b);
+        canvas.setTextColor(line1Color);
+        canvas.drawString(line1, W / 2, Y(mid - (two ? 16 : 0)));
+    }
+    if (two) {
+        canvas.setFont(&fonts::FreeSans9pt7b);
+        canvas.setTextColor(COLOR_SUBTEXT);
+        canvas.drawString(line2, W / 2, Y(mid + 16));
+    }
+}
+
+void TFTManager::renderTextLandscape(const char* l1, const char* l2, uint32_t l1Color) {
+    const int W = 480, H = 320;
+    if (psramFound()) {
+        LGFX_Sprite full(&_tft);
+        full.setPsram(true);
+        full.setColorDepth(16);
+        if (full.createSprite(W, H)) {
+            full.fillScreen(COLOR_BG);
+            drawStatusBar(full, 0);
+            drawLandscapeText(full, 0, l1, l2, l1Color);
+            full.pushSprite(0, 0);
+            full.deleteSprite();
+            return;
+        }
+        Serial.println("TFT: PSRAM text sprite failed, using strips");
+    }
+    const int STRIP_H = 32;
+    LGFX_Sprite strip(&_tft);
+    strip.setColorDepth(16);
+    if (!strip.createSprite(W, STRIP_H)) return;
+    for (int bandY = 0; bandY < H; bandY += STRIP_H) {
+        strip.fillScreen(COLOR_BG);
+        drawStatusBar(strip, bandY);
+        drawLandscapeText(strip, bandY, l1, l2, l1Color);
+        strip.pushSprite(0, bandY);
+    }
+    strip.deleteSprite();
 }
 
 // Repaint only the top status band (cheap, ~24KB strip) so idle status stays
