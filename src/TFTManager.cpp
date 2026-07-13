@@ -551,11 +551,13 @@ void TFTManager::drawStatusBar(LGFX_Sprite& canvas, int yOffset) {
     LandscapeLayout L = landscapeLayout(480, 320);
     auto Y = [&](int y){ return y - yOffset; };
     canvas.fillRect(0, Y(0), 480, L.headerH, COLOR_HEADER_BG);
+    canvas.setFont(&fonts::FreeSansBold9pt7b);
     canvas.setTextColor(COLOR_ACCENT);
     canvas.setTextSize(1);
     canvas.setTextDatum(ML_DATUM);
-    canvas.drawString("SpoolSense", 6, Y(L.headerH / 2));
+    canvas.drawString("SpoolSense", 8, Y(L.headerH / 2));
 
+    canvas.setFont(&fonts::Font0);  // compact labels for the status cluster
     int cy = Y(L.headerH / 2);
     int x = 480 - 8;  // right-to-left cursor
     // PRN only when the PrusaLink printer integration is enabled — that is what
@@ -598,26 +600,29 @@ void TFTManager::drawLandscapeSpool(LGFX_Sprite& canvas, int yOffset,
         case TAG_TYPE_OPENSPOOL:    tagLabel = "OpenSpool";    tagColor = 0xE91E63; break;
     }
     if (tagLabel) {
+        canvas.setFont(&fonts::FreeSans9pt7b);
+        canvas.setTextSize(1);
         canvas.setTextDatum(MR_DATUM);
         canvas.setTextColor(tagColor);
-        canvas.setTextSize(1);
-        canvas.drawString(tagLabel, W - 8, Y(L.headerH + 12));
+        canvas.drawString(tagLabel, W - 8, Y(L.headerH + 14));
     }
 
     // Right column text
     canvas.setTextDatum(ML_DATUM);
-    canvas.setTextColor(COLOR_TEXT);
-    canvas.setTextSize(2);
-    canvas.drawString(spool.brand[0] ? spool.brand : "Unknown", L.textX, Y(L.brandY));
     canvas.setTextSize(1);
+    canvas.setFont(&fonts::FreeSansBold12pt7b);
+    canvas.setTextColor(COLOR_TEXT);
+    canvas.drawString(spool.brand[0] ? spool.brand : "Unknown", L.textX, Y(L.brandY));
     char line[48];
     snprintf(line, sizeof(line), "%s  #%s", spool.material, spool.colorHex);
+    canvas.setFont(&fonts::FreeSans9pt7b);
     canvas.setTextColor(COLOR_SUBTEXT);
     canvas.drawString(line, L.textX, Y(L.materialY));
 
     if (spool.totalWeight > 0) {
         snprintf(line, sizeof(line), "%.0fg / %.0fg",
                  spool.remainingWeight, spool.totalWeight);
+        canvas.setFont(&fonts::FreeSansBold9pt7b);
         canvas.setTextColor(COLOR_TEXT);
         canvas.drawString(line, L.textX, Y(L.weightY));
         const LandscapeRect& b = L.weightBar;
@@ -636,6 +641,7 @@ void TFTManager::drawLandscapeReady(LGFX_Sprite& canvas, int yOffset) {
     LandscapeLayout L = landscapeLayout(W, H);
     auto Y = [&](int y){ return y - yOffset; };
     drawSpoolImage(canvas, W / 2, L.spoolCy, 0x888888, yOffset);  // neutral grey idle spool
+    canvas.setFont(&fonts::FreeSans9pt7b);
     canvas.setTextDatum(MC_DATUM);
     canvas.setTextColor(COLOR_SUBTEXT);
     canvas.setTextSize(1);
