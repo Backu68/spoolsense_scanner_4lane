@@ -145,7 +145,9 @@ private:
     void drawLandscapeSpool(LGFX_Sprite& canvas, int yOffset, const DisplaySpoolData& spool);
     void drawLandscapeReady(LGFX_Sprite& canvas, int yOffset);                 // idle body
     void drawStatusBar(LGFX_Sprite& canvas, int yOffset);                       // shared top bar
-    void drawSpoolOn(LGFX_Sprite& canvas, int cx, int cy, int oR, int iR, uint32_t fill);
+    // Tinted 3D spool image: coil takes `tint` (brightness-gated), reel stays
+    // neutral. (cx,cy) is the screen-space center; yOffset is the strip band.
+    void drawSpoolImage(LGFX_Sprite& canvas, int cx, int cy, uint32_t tint, int yOffset);
     void drawWifiBars(LGFX_Sprite& canvas, int x, int y, int rssi, bool connected);
     uint32_t hexToRgb(const char* hex);
     uint32_t dimColor(uint32_t color, uint8_t brightness); // for low-spool breathing

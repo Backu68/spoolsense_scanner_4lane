@@ -5,6 +5,7 @@
 #include "TaskUtils.h"
 #include "HomeAssistantManager.h"
 #include "PrinterManager.h"
+#include "SpoolImage.h"
 #include <WiFi.h>
 #include <Arduino.h>
 
@@ -500,20 +501,31 @@ void TFTManager::renderSpoolScanned(const DisplaySpoolData& spool) {
     blitCanvas();
 }
 
-// Canvas-aware spool disc (shared by the scanned + idle landscape bodies).
-void TFTManager::drawSpoolOn(LGFX_Sprite& canvas, int cx, int cy, int oR, int iR, uint32_t fill) {
-    canvas.fillCircle(cx + 3, cy + 3, oR, 0x111111);
-    canvas.fillCircle(cx, cy, oR, COLOR_SPOOL_RIM);
-    canvas.fillCircle(cx, cy, oR - 5, fill);
-    canvas.fillCircle(cx, cy, iR, COLOR_SPOOL_HUB);
-    for (int i = 0; i < 6; i++) {
-        float a = i * (float)(M_PI / 3.0);
-        int x1 = cx + (int)(cosf(a) * (iR - 2)), y1 = cy + (int)(sinf(a) * (iR - 2));
-        int x2 = cx + (int)(cosf(a) * (oR - 8)), y2 = cy + (int)(sinf(a) * (oR - 8));
-        canvas.drawLine(x1, y1, x2, y2, COLOR_SPOOL_RIM);
+// Tinted 3D spool image. For each luminance pixel: brightness gates how much of
+// the tint colour is applied, so the bright coil takes `tint` (with its wound
+// shading) while the dark reel/hub stay neutral grey; luminance 0 = background
+// (skipped -> shows the black panel). Integer math only (C6 has no FPU).
+// yOffset lets one call fill a strip band; rows outside the canvas are skipped.
+void TFTManager::drawSpoolImage(LGFX_Sprite& canvas, int cx, int cy, uint32_t tint, int yOffset) {
+    const int w = SPOOL_IMG_W, h = SPOOL_IMG_H;
+    const int x0 = cx - w / 2, y0 = cy - h / 2;
+    const int cr = (tint >> 16) & 0xFF, cg = (tint >> 8) & 0xFF, cb = tint & 0xFF;
+    const int chH = canvas.height();
+    for (int iy = 0; iy < h; iy++) {
+        int destY = y0 + iy - yOffset;
+        if (destY < 0 || destY >= chH) continue;   // outside this band/canvas
+        const uint8_t* row = &SPOOL_IMG_LUM[iy * w];
+        for (int ix = 0; ix < w; ix++) {
+            int l = pgm_read_byte(&row[ix]);
+            if (!l) continue;                       // transparent
+            int t = (l - 60) * 256 / 140;           // tint strength 0..256
+            if (t < 0) t = 0; else if (t > 256) t = 256;
+            int r = ((t * cr + (256 - t) * 255) * l) / (255 * 256);
+            int g = ((t * cg + (256 - t) * 255) * l) / (255 * 256);
+            int b = ((t * cb + (256 - t) * 255) * l) / (255 * 256);
+            canvas.drawPixel(x0 + ix, destY, canvas.color565(r, g, b));
+        }
     }
-    canvas.drawCircle(cx, cy, oR, 0x666666);
-    canvas.fillCircle(cx, cy, 4, 0x888888);
 }
 
 // 4-bar WiFi signal indicator; baseline at y, bars grow upward.
@@ -573,8 +585,7 @@ void TFTManager::drawLandscapeSpool(LGFX_Sprite& canvas, int yOffset,
     LandscapeLayout L = landscapeLayout(W, H);
     auto Y = [&](int y){ return y - yOffset; };
 
-    drawSpoolOn(canvas, L.spoolCx, Y(L.spoolCy), L.spoolOuterR, L.spoolInnerR,
-                hexToRgb(spool.colorHex));
+    drawSpoolImage(canvas, L.spoolCx, L.spoolCy, hexToRgb(spool.colorHex), yOffset);
 
     // Tag-type badge (top-right of body, below the status bar)
     const char* tagLabel = nullptr; uint32_t tagColor = COLOR_SUBTEXT;
@@ -624,7 +635,7 @@ void TFTManager::drawLandscapeReady(LGFX_Sprite& canvas, int yOffset) {
     const int W = 480, H = 320;
     LandscapeLayout L = landscapeLayout(W, H);
     auto Y = [&](int y){ return y - yOffset; };
-    drawSpoolOn(canvas, W / 2, Y(L.spoolCy), L.spoolOuterR, L.spoolInnerR, COLOR_SPOOL_RIM);
+    drawSpoolImage(canvas, W / 2, L.spoolCy, 0x888888, yOffset);  // neutral grey idle spool
     canvas.setTextDatum(MC_DATUM);
     canvas.setTextColor(COLOR_SUBTEXT);
     canvas.setTextSize(1);
