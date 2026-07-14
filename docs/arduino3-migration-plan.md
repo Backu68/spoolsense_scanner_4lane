@@ -349,16 +349,11 @@ Shared-SPI regression gate:
   macros). Flash is 94.9% on the 4 MB part. The C5-takes-C6-register-branch
   assumption is compile-proven only — rendering correctness, NFC coexistence,
   and soaks are pending on a real C5 DevKitC-1.
-  - **Why not patch 1.2.21 for C5 now:** LovyanGFX issue
-    [#700](https://github.com/lovyan03/LovyanGFX/issues/700) documents the only
-    sanctioned path — a collaborator directs users to the **`develop`** branch
-    plus a C5 device profile and extending every `CONFIG_IDF_TARGET_ESP32C3/C6`
-    conditional to include C5. The pinned 1.2.21 release has ~26 such
-    register-level guards in `esp32/common.cpp` alone; aliasing C5 onto the C6
-    branches there is an unverified assumption about C5 silicon register layout,
-    it contradicts our pin-to-1.2.21 constraint (upstream says use `develop`),
-    and there is no C5 hardware to validate the resulting binary. A fail-closed
-    build-time patch is therefore deferred rather than shipped blind. Revisit
+  - **Patch history:** the aliasing was initially deferred because there was no
+    C5 hardware to validate the C5-takes-C6-register-branch assumption. Once a
+    C5 DevKitC-1 was on hand (2026-07-13), the fail-closed build-time patch
+    described above was implemented per LovyanGFX issue
+    [#700](https://github.com/lovyan03/LovyanGFX/issues/700). Drop the patch
     when LovyanGFX cuts a release with first-class C5 support.
 - Bench execution is the hardware owner's task. Every gate above is mapped to
   reproducible steps and acceptance criteria in

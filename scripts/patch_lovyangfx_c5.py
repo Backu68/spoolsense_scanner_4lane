@@ -116,14 +116,7 @@ def fail(msg):
     env.Exit(1)
 
 
-def main():
-    if os.path.isfile(MARKER):
-        print("patch_lovyangfx_c5: already applied (marker present)")
-        return
-
-    if not os.path.isdir(LIB_DIR):
-        fail("LovyanGFX not found at %s (lib_deps not installed yet?)" % LIB_DIR)
-
+def verify_version():
     lib_json = os.path.join(LIB_DIR, "library.json")
     try:
         with open(lib_json) as f:
@@ -133,6 +126,37 @@ def main():
     if version != PINNED_VERSION:
         fail("LovyanGFX version is %r, patch is only validated against %s"
              % (version, PINNED_VERSION))
+
+
+def verify_already_patched():
+    # The marker alone is not trusted: re-verify the version and that every
+    # patched file actually contains its rewritten text (a restored/corrupted
+    # source with a stale marker must fail closed, not silently build).
+    verify_version()
+    for rel, subs in EDITS:
+        path = os.path.join(LIB_DIR, rel)
+        try:
+            with open(path) as f:
+                content = f.read()
+        except OSError as e:
+            fail("marker present but cannot read %s: %s" % (rel, e))
+        for _old, new, expected in subs:
+            if content.count(new) < expected:
+                fail("marker present but %s lacks the patched text %r — "
+                     "stale marker; wipe .pio/libdeps/%s/LovyanGFX and rebuild"
+                     % (rel, new[:60], env.subst("$PIOENV")))
+
+
+def main():
+    if os.path.isfile(MARKER):
+        verify_already_patched()
+        print("patch_lovyangfx_c5: already applied (marker + content verified)")
+        return
+
+    if not os.path.isdir(LIB_DIR):
+        fail("LovyanGFX not found at %s (lib_deps not installed yet?)" % LIB_DIR)
+
+    verify_version()
 
     for rel, subs in EDITS:
         path = os.path.join(LIB_DIR, rel)

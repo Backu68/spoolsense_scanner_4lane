@@ -107,6 +107,7 @@ task stack high-water marks, and reset reason.
    - Pass: zero SPI errors, watchdog resets, corrupt frames, corrupt tag data,
      or failed verified writes. Archive serial logs and start/end diagnostics.
 
-Do not mark C6 shared TFT validated—or enable C5 shared TFT—until all applicable
-items pass on physical hardware. A failure keeps TFT deferred without blocking
-the NFC-capable Arduino-3.x target.
+Do not mark C6 or C5 shared TFT validated until all applicable items pass on
+physical hardware. A gate failure demotes that target's TFT back to
+unsupported (compile-disabled) without blocking the NFC-capable Arduino-3.x
+release.

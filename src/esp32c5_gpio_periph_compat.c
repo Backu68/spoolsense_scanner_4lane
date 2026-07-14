@@ -11,7 +11,9 @@
 #include "soc/io_mux_reg.h"
 #include "soc/soc_caps.h"
 
-const uint32_t GPIO_PIN_MUX_REG[SOC_GPIO_PIN_COUNT] = {
+// Weak so a future C5 SDK that ships the real table wins at link time
+// instead of colliding with this stopgap.
+__attribute__((weak)) const uint32_t GPIO_PIN_MUX_REG[SOC_GPIO_PIN_COUNT] = {
     IO_MUX_GPIO0_REG,  IO_MUX_GPIO1_REG,  IO_MUX_GPIO2_REG,  IO_MUX_GPIO3_REG,
     IO_MUX_GPIO4_REG,  IO_MUX_GPIO5_REG,  IO_MUX_GPIO6_REG,  IO_MUX_GPIO7_REG,
     IO_MUX_GPIO8_REG,  IO_MUX_GPIO9_REG,  IO_MUX_GPIO10_REG, IO_MUX_GPIO11_REG,
