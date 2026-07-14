@@ -332,12 +332,23 @@ Shared-SPI regression gate:
 - C6 pin map: shared SCK GPIO6, shared MOSI GPIO7, NFC MISO GPIO2/NSS GPIO10,
   TFT CS GPIO3/DC GPIO11/RST GPIO18, TFT MISO disconnected. Unused PN5180
   IRQ/GPIO/AUX are `-1` and optional in the connection setup.
-- **C5 TFT cleanly deferred.** Its capability-ready map is SCK GPIO6, MOSI
-  GPIO8, NFC MISO GPIO9/NSS GPIO10, TFT CS GPIO4/DC GPIO5/RST GPIO12. LovyanGFX
-  1.2.21 does not compile its ESP32 GPIO backend for C5; the C5 environment
-  therefore retains `BOARD_NO_TFT`, the library/source exclusions, and the
-  NFC-only bus owner. No dependency pin or generated library source was
-  patched to force an unsafe result.
+- **C5 TFT compile-enabled 2026-07-13 (hardware validation pending).** The C5
+  env now sets `BOARD_SHARED_SPI` with the pin map SCK GPIO6, MOSI GPIO8, NFC
+  MISO GPIO9/NSS GPIO10, TFT CS GPIO4/DC GPIO5/RST GPIO12.
+  `scripts/patch_lovyangfx_c5.py` (a `pre:` extra_script on the esp32c5 env)
+  applies upstream's sanctioned aliasing (issue #700) to the env-local
+  LovyanGFX copy at build time: the C6 device profile also matches C5, every
+  `CONFIG_IDF_TARGET_ESP32C6` register disjunct also matches C5, and a
+  C5-only block maps the library's `DMA_*` aliases onto C5's AHB-DMA names
+  (`AHB_DMA_*`, verified 1:1 in the C5 soc headers) with `GDMA` aliased to the
+  `AHB_DMA` instance. The patch is fail-closed: it verifies LovyanGFX is
+  exactly 1.2.21 and that every replacement lands its expected count, else it
+  aborts the build. `src/esp32c5_gpio_periph_compat.c` supplies the
+  `GPIO_PIN_MUX_REG[]` table that C5's prebuilt libsoc.a omits (declared by
+  the common soc header; built from the SDK's own `IO_MUX_GPIO<n>_REG`
+  macros). Flash is 94.9% on the 4 MB part. The C5-takes-C6-register-branch
+  assumption is compile-proven only — rendering correctness, NFC coexistence,
+  and soaks are pending on a real C5 DevKitC-1.
   - **Why not patch 1.2.21 for C5 now:** LovyanGFX issue
     [#700](https://github.com/lovyan03/LovyanGFX/issues/700) documents the only
     sanctioned path — a collaborator directs users to the **`develop`** branch

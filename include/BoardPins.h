@@ -152,8 +152,8 @@
   #define PIN_KEYPAD_COL1  -1
   #define PIN_KEYPAD_COL2  -1
   #define PIN_KEYPAD_COL3  -1
-  // Capability-ready shared-bus map. TFT remains disabled until the pinned
-  // LovyanGFX release supports ESP32-C5's GPIO register layout.
+  // Shared-bus map. LovyanGFX 1.2.21 gains C5 support via the fail-closed
+  // build-time patch in scripts/patch_lovyangfx_c5.py (upstream issue #700).
   #define PIN_TFT_MOSI     PIN_PN5180_MOSI
   #define PIN_TFT_SCLK     PIN_PN5180_SCK
   #define PIN_TFT_MISO     -1

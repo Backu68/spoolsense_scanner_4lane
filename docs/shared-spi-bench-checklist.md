@@ -1,9 +1,11 @@
 # C5/C6 shared-SPI TFT + NFC bench checklist
 
-Status: C6 firmware compiles with the shared-SPI capability enabled, but every
-hardware item below is unverified. C5 TFT is intentionally disabled until the
-pinned LovyanGFX 1.2.21 supports ESP32-C5; run the same checklist before later
-enabling `BOARD_SHARED_SPI` there.
+Status: C6 shared-SPI is validated informally on hardware (ILI9488 landscape
+dashboard, PN5180 scan/write/Spoolman coexistence, 20h+ heap-stable soak); the
+formal gate items below (25x cold boot, wedge isolation, PN532 parity, latency
+budget) are still open. C5 TFT is compile-enabled via the build-time LovyanGFX
+patch (scripts/patch_lovyangfx_c5.py, `BOARD_SHARED_SPI` already set); run this
+checklist on a real C5 before calling it validated.
 
 ## Wiring and instruments
 
@@ -14,7 +16,7 @@ though the TFT never reads, so the NFC MISO must be wired for tag reads to work.
 Install external pull-ups, typically 10 kOhm to 3.3 V, on both NFC CS and TFT
 CS; firmware-driven HIGH is not a substitute during reset.
 
-| Signal | C6 GPIO | C5 GPIO (deferred) |
+| Signal | C6 GPIO | C5 GPIO (pending validation) |
 |---|---:|---:|
 | Shared SCK | 6 | 6 |
 | Shared MOSI | 7 | 8 |
@@ -93,14 +95,14 @@ task stack high-water marks, and reset reason.
    - Compare diagnostics before TFT init, after init, after one hour, and after
      OTA sprite release. Pass: stable heap/largest-block floors, no allocation
      failure, and no task stack high-water mark below the project safety floor.
-   - Repeat on C5 only after TFT capability is enabled there.
+   - Repeat on C5 (compile-enabled; validation pending).
 
 7. **Duration soaks**
 
    - Run two hours of active animation plus alternating reads and verified
      writes with PN5180, then two hours with PN532. Follow with an overnight run
      that continues animation/scanning and performs periodic verified writes.
-   - Repeat the complete sequence on C5 after its TFT compile blocker is
+   - Repeat the complete sequence on C5 now that its TFT compile path is
      resolved.
    - Pass: zero SPI errors, watchdog resets, corrupt frames, corrupt tag data,
      or failed verified writes. Archive serial logs and start/end diagnostics.

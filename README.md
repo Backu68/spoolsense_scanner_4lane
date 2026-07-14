@@ -227,7 +227,7 @@ The S3-Zero has a smaller pin count. The PN5180 and LCD (if used) share the same
 
 **Status LED:** The S3-Zero, C6 DevKitC-1, and C5 DevKitC-1 have onboard addressable RGB LEDs (GPIO 21, 8, and 27 respectively) — no external LED or wiring needed. If compiling from source, enable it with `#define ENABLE_STATUS_LED 1` in `UserConfig.h`. The installer enables it by default.
 
-**C5/C6 display support:** C6 has compile-time shared-SPI TFT support for a write-only display plus either NFC reader; it is pending the hardware regression/soak checklist before being called validated. C5 currently supports the I2C LCD but not TFT because LovyanGFX 1.2.21 lacks ESP32-C5 GPIO-register support. Keypad remains disabled on both targets. See `docs/shared-spi-bench-checklist.md` for wiring and validation status.
+**C5/C6 display support:** both targets support a shared-SPI TFT (write-only display plus either NFC reader on one bus). C6 is hardware-validated with a 3.5" ILI9488 landscape dashboard; C5 is compile-enabled via a build-time LovyanGFX patch (`scripts/patch_lovyangfx_c5.py`) and pending hardware validation. Keypad remains disabled on both targets. See `docs/shared-spi-bench-checklist.md` for wiring and validation status.
 
 **Serial:** The S3-Zero uses USB CDC — just plug in a USB-C cable, no external UART adapter needed.
 
