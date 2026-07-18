@@ -2,6 +2,12 @@
 
 ## [1.9.0] - 2026-07-17
 
+### Upgrade notes — read before updating
+
+- **OTA upgrading from 1.8.x works normally** and keeps all settings (validated on hardware: the 1.8.x bootloader boots this release across repeated updates on both OTA slots).
+- **Downgrading is not supported.** This release moves to a new system framework (Arduino-ESP32 3.x / ESP-IDF 5.5). Going back to 1.8.x requires a full USB reflash **and wipes all settings** (the old firmware cannot read this release's configuration storage). There is no OTA path backward.
+- ESP32-C6 and ESP32-C5 use a new 8MB partition layout with larger update slots. Flash them with the full images from this release (web flasher or USB); they cannot be provisioned from older instructions.
+
 ### Added
 
 - **ESP32-C6 and ESP32-C5 DevKitC-1 targets** — firmware environments, validated NFC board pin maps, onboard RGB LED support, CI builds, and release artifacts. Both targets support PN5180/PN532 NFC, I2C LCD, and the full network/web feature set; keypad remains disabled.
