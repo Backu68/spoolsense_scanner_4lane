@@ -21,7 +21,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        env: [esp32dev, esp32s3zero, esp32c3, esp32s3devkitc]
+        env: [esp32dev, esp32s3zero, esp32c3, esp32s3devkitc, esp32c6, esp32c5]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -40,3 +40,5 @@ jobs:
         run: cp include/UserConfig.example.h include/UserConfig.h
       - name: Build
         run: pio run -e ${{ matrix.env }}
+      - name: Flash budget
+        run: python scripts/check_flash_budget.py ${{ matrix.env }}

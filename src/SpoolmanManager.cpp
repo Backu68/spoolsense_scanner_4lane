@@ -1,4 +1,5 @@
 #include "SpoolmanManager.h"
+#include "TaskUtils.h"
 #include "ConfigurationManager.h"
 #include "ApplicationManager.h"
 #include "MemoryDiagnostics.h"
@@ -1292,7 +1293,7 @@ void SpoolmanManager::startTask() {
         return;
     }
 
-    xTaskCreatePinnedToCore(
+    BaseType_t created = createTaskWithAffinity(
         taskFunc,
         "SpoolmanSync",
         TASK_STACK_SIZE,
@@ -1301,7 +1302,12 @@ void SpoolmanManager::startTask() {
         &taskHandle,
         1  // Core 1
     );
-    Serial.println("SpoolmanManager: Task started");
+    if (created == pdPASS) {
+        Serial.println("SpoolmanManager: Task started");
+    } else {
+        taskHandle = nullptr;
+        Serial.println("SpoolmanManager: ERROR — task creation failed");
+    }
 }
 
 bool SpoolmanManager::enqueueSync(const SpoolmanSyncRequest& req) {

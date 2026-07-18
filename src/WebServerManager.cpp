@@ -1,6 +1,9 @@
 #include "WebServerManager.h"
+#include "TaskUtils.h"
 
 #ifndef NATIVE_TEST
+
+#include <WiFi.h>
 
 #include <Arduino.h>
 #include <ESPmDNS.h>
@@ -1023,7 +1026,16 @@ void WebServerManager::handleApiPostConfig() {
 void WebServerManager::handleApiVersion() {
     StaticJsonDocument<128> doc;
     doc["version"] = FIRMWARE_VERSION;
-#ifdef BOARD_ESP32_S3
+    // Matches the PlatformIO env / release-asset naming for each target.
+#if defined(BOARD_ESP32_C6)
+    doc["board"] = "esp32c6";
+#elif defined(BOARD_ESP32_C5)
+    doc["board"] = "esp32c5";
+#elif defined(BOARD_ESP32_C3)
+    doc["board"] = "esp32c3";
+#elif defined(BOARD_S3_DEVKITC)
+    doc["board"] = "esp32s3devkitc";
+#elif defined(BOARD_ESP32_S3)
     doc["board"] = "esp32s3zero";
 #else
     doc["board"] = "esp32dev";
@@ -1126,7 +1138,7 @@ void WebServerManager::handleApiUpdateFromUrl() {
     _otaError[0] = '\0';
 
     Serial.printf("OTA: Free heap before task: %u\n", ESP.getFreeHeap());
-    BaseType_t created = xTaskCreatePinnedToCore(otaDownloadTask, "OTATask", 24576, this, 2, nullptr, 0);
+    BaseType_t created = createTaskWithAffinity(otaDownloadTask, "OTATask", 24576, this, 2, nullptr, 0);
     if (created != pdPASS) {
         _otaState = OtaState::IDLE;
         sendError(500, "Failed to start OTA task");

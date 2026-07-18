@@ -1,5 +1,30 @@
 # Changelog
 
+## [1.9.0] - 2026-07-17
+
+### Upgrade notes — read before updating
+
+- **OTA upgrading from 1.8.x works normally** and keeps all settings (validated on hardware: the 1.8.x bootloader boots this release across repeated updates on both OTA slots).
+- **Downgrading is not supported.** This release moves to a new system framework (Arduino-ESP32 3.x / ESP-IDF 5.5). There is no OTA path backward; going back to 1.8.x requires a full USB reflash, and in our testing the downgraded firmware could not read settings written by 1.9.0 — expect to reconfigure the device from scratch.
+- ESP32-C6 and ESP32-C5 use a new 8MB partition layout with larger update slots. Flash them with the full images from this release via USB (`esptool`/PlatformIO); web-flasher support for these boards follows separately. They cannot be provisioned from older instructions.
+
+### Added
+
+- **ESP32-C6 and ESP32-C5 DevKitC-1 targets** — firmware environments, validated NFC board pin maps, onboard RGB LED support, CI builds, and release artifacts. Both targets support PN5180/PN532 NFC, I2C LCD, and the full network/web feature set; keypad remains disabled.
+- **Capability-gated shared SPI on ESP32-C6** — a write-only TFT and either PN5180 or PN532 use one initialized GP-SPI host, distinct fail-safe chip selects, and a recursive bounded transaction guard. Validated on C6 hardware with an ILI9488.
+- **Landscape dashboard for the 3.5" ILI9488 (480×320)** — full-screen landscape scanned-spool view with a tinted 3D spool image (the coil takes the scanned filament colour, the reel stays neutral), FreeSans typography, a persistent WiFi/Home-Assistant/printer status bar that stays live while idle, and landscape scan-progress/status screens. Renders via a ~30 KB strip pipeline on no-PSRAM boards or a full 16-bit framebuffer with PSRAM.
+- **Refreshed 240×240 screens (ST7789/GC9A01)** — the scanned and idle views use the same tinted 3D spool image as the large display, and the header-based status screens show a live WiFi signal indicator.
+- **ESP32-C5 shared-SPI TFT (compile-enabled)** — `scripts/patch_lovyangfx_c5.py` applies LovyanGFX upstream's sanctioned ESP32-C5 aliasing (issue #700) to the pinned 1.2.21 release at build time, fail-closed against version or text drift, plus a C5 AHB-DMA register mapping and the `GPIO_PIN_MUX_REG` table the C5 SDK omits. Hardware validation pending.
+
+### Fixed
+
+- `/api/version` now reports the correct board on every target (S3-DevKitC, C3, C6, and C5 previously misreported as `esp32s3zero`/`esp32dev`).
+
+### Changed
+
+- **Arduino-ESP32 3.3.9 / ESP-IDF 5.5.4 migration** — PlatformIO now uses the exact pioarduino `55.03.39` release. Task creation is unicore-safe on C3/C5/C6, the NFC watchdog uses the IDF 5 reconfiguration API with checked errors, and WiFi dependencies are included explicitly for Arduino 3.x.
+- **LovyanGFX 1.2.21** — updated the exact pin for Arduino 3.x compatibility; the esp32c5 environment applies the build-time C5 enablement patch above.
+
 ## [1.8.3] - 2026-07-11
 
 ### Security

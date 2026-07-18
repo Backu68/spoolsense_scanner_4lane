@@ -3,6 +3,7 @@
 // (write_tag, update_remaining). FreeRTOS task maintains MQTT connection with exponential backoff.
 
 #include "HomeAssistantManager.h"
+#include "TaskUtils.h"
 #include "ApplicationManager.h"
 #include "ConfigurationManager.h"
 #include "ConversionUtils.h"
@@ -255,7 +256,7 @@ void HomeAssistantManager::startTask() {
     lastReconnectAttempt_ = 0;
 
     // Core 1 for MQTT task — keeps main WiFi/NFC/application logic on Core 0
-    BaseType_t rc = xTaskCreatePinnedToCore(
+    BaseType_t rc = createTaskWithAffinity(
         taskFunc,
         "HATask",
         TASK_STACK_SIZE,

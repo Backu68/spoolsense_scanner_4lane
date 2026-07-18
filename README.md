@@ -102,6 +102,8 @@ Configuration is stored in NVS (non-volatile storage) and survives OTA firmware 
 4. Flash:
    - **WROOM:** `pio run -e esp32dev -t upload`
    - **S3-Zero:** `pio run -e esp32s3zero -t upload`
+   - **C6 DevKitC-1:** `pio run -e esp32c6 -t upload`
+   - **C5 DevKitC-1:** `pio run -e esp32c5 -t upload`
 5. **Important for OTA updates:** Run the installer in "Config only" mode to write your settings to NVS. Without this, OTA updates will overwrite your compiled-in settings with defaults.
    ```bash
    curl -sL https://raw.githubusercontent.com/SpoolSense/spoolsense-installer/main/install.sh -o /tmp/install.sh && bash /tmp/install.sh
@@ -223,7 +225,9 @@ The S3-Zero has a smaller pin count. The PN5180 and LCD (if used) share the same
 
 > **Note:** The LCD module needs 5V on VCC for display contrast. The I2C SDA/SCL lines run at 3.3V logic, which the PCF8574 backpack accepts without a level shifter.
 
-**Status LED:** The S3-Zero has an onboard WS2812 RGB LED on GPIO 21 — no external LED or wiring needed. If compiling from source, enable it with `#define ENABLE_STATUS_LED 1` in `UserConfig.h`. The installer enables it by default.
+**Status LED:** The S3-Zero, C6 DevKitC-1, and C5 DevKitC-1 have onboard addressable RGB LEDs (GPIO 21, 8, and 27 respectively) — no external LED or wiring needed. If compiling from source, enable it with `#define ENABLE_STATUS_LED 1` in `UserConfig.h`. The installer enables it by default.
+
+**C5/C6 display support:** both targets support a shared-SPI TFT (write-only display plus either NFC reader on one bus). C6 is hardware-validated with a 3.5" ILI9488 landscape dashboard; C5 is compile-enabled via a build-time LovyanGFX patch (`scripts/patch_lovyangfx_c5.py`) and pending hardware validation. Keypad remains disabled on both targets. See `docs/shared-spi-bench-checklist.md` for wiring and validation status.
 
 **Serial:** The S3-Zero uses USB CDC — just plug in a USB-C cable, no external UART adapter needed.
 
@@ -236,11 +240,13 @@ The S3-Zero has a smaller pin count. The PN5180 and LCD (if used) share the same
    - MQTT broker host, port, and credentials
    - Spoolman URL (optional)
    - Automation mode (`0` = Self Directed, `1` = Controlled by HA)
-   - Board selection (`BOARD_ESP32_WROOM` or `BOARD_ESP32_S3`)
+   - Board selection (normally supplied by the selected PlatformIO environment)
    - Optional hardware: LCD and status LED (see below)
 3. Flash the firmware:
    - **WROOM:** `pio run -e esp32dev -t upload`
    - **S3-Zero:** `pio run -e esp32s3zero -t upload`
+   - **C6 DevKitC-1:** `pio run -e esp32c6 -t upload`
+   - **C5 DevKitC-1:** `pio run -e esp32c5 -t upload`
 
 > **Note:** If you used the SpoolSense Installer, configuration is stored in NVS and you don't need `UserConfig.h`.
 

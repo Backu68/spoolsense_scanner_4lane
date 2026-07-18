@@ -4,7 +4,7 @@
 
 class TFTDashboard {
 public:
-    void render(LGFX_Sprite* sprite, const TrayDashboardState& state);
+    void render(LGFX_Sprite* sprite, const TrayDashboardState& state, int offX = 0, int offY = 0);
 
 private:
     void renderCell(LGFX_Sprite* sprite, int x, int y, int w, int h,

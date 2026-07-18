@@ -47,7 +47,17 @@ public:
             cfg.freq_read  = 16000000;
             cfg.pin_sclk   = PIN_TFT_SCLK;
             cfg.pin_mosi   = PIN_TFT_MOSI;
+#if defined(BOARD_SHARED_SPI)
+            // On single-GP-SPI boards LovyanGFX performs the one and only
+            // Arduino SPI.begin() for the whole bus, and Arduino's
+            // SPIClass::begin() ignores a second begin() once the bus is
+            // started. The shared bus must therefore come up with the
+            // PN5180/PN532 MISO routed here — the write-only TFT never reads
+            // it, but NFC cannot read tag responses without it.
+            cfg.pin_miso   = PIN_PN5180_MISO;
+#else
             cfg.pin_miso   = PIN_TFT_MISO;
+#endif
             cfg.pin_dc     = PIN_TFT_DC;
             _bus_instance.config(cfg);
         }
@@ -83,10 +93,10 @@ public:
             } else if (driver == TFTDriver::ILI9488) {
                 cfg.memory_width  = 320;
                 cfg.memory_height = 480;
-                cfg.panel_width   = 240;
-                cfg.panel_height  = 240;
-                cfg.offset_x      = 40;
-                cfg.offset_y      = 120;
+                cfg.panel_width   = 320;   // full native panel (landscape via rotation)
+                cfg.panel_height  = 480;
+                cfg.offset_x      = 0;
+                cfg.offset_y      = 0;
             } else {
                 cfg.memory_width  = 240;
                 cfg.memory_height = 240;
@@ -95,7 +105,9 @@ public:
                 cfg.offset_x      = 0;
                 cfg.offset_y      = 0;
             }
-            cfg.offset_rotation = 0;
+            // ILI9488 3.5" modules ship X-mirrored vs the ST7789 default and are
+            // mounted landscape; rotation 5 = 90° + horizontal mirror-correct.
+            cfg.offset_rotation = (driver == TFTDriver::ILI9488) ? 5 : 0;
             cfg.dummy_read_pixel = 8;
             cfg.dummy_read_bits  = 1;
             cfg.readable     = false;
@@ -122,7 +134,7 @@ public:
     }
 };
 
-#else // WROOM or C3
+#else // WROOM or single-SPI C3/C5/C6
 
 class LGFX : public lgfx::LGFX_Device {
     lgfx::Panel_ST7789  _panel_st7789;
@@ -134,12 +146,12 @@ class LGFX : public lgfx::LGFX_Device {
 
 public:
     LGFX(TFTDriver driver = TFTDriver::ST7789) {
-        // SPI bus — WROOM uses VSPI (PN5180 on HSPI). C3 has no VSPI; TFT is
-        // out of scope for C3 builds but LGFX must still link, so fall back to SPI2.
+        // SPI bus — WROOM uses VSPI (PN5180 on HSPI). Capability-enabled
+        // single-SPI boards share SPI2 with NFC; disabled targets do not link LGFX.
         {
             auto cfg = _bus_instance.config();
-#if defined(BOARD_ESP32_C3)
-            cfg.spi_host   = SPI2_HOST;  // C3 only has SPI2 — TFT not supported at runtime
+#if defined(BOARD_ESP32_C3) || defined(BOARD_ESP32_C5) || defined(BOARD_ESP32_C6)
+            cfg.spi_host   = SPI2_HOST;
 #else
             cfg.spi_host   = VSPI_HOST;
 #endif
@@ -148,7 +160,17 @@ public:
             cfg.freq_read  = 16000000;
             cfg.pin_sclk   = PIN_TFT_SCLK;
             cfg.pin_mosi   = PIN_TFT_MOSI;
+#if defined(BOARD_SHARED_SPI)
+            // On single-GP-SPI boards LovyanGFX performs the one and only
+            // Arduino SPI.begin() for the whole bus, and Arduino's
+            // SPIClass::begin() ignores a second begin() once the bus is
+            // started. The shared bus must therefore come up with the
+            // PN5180/PN532 MISO routed here — the write-only TFT never reads
+            // it, but NFC cannot read tag responses without it.
+            cfg.pin_miso   = PIN_PN5180_MISO;
+#else
             cfg.pin_miso   = PIN_TFT_MISO;
+#endif
             cfg.pin_dc     = PIN_TFT_DC;
             _bus_instance.config(cfg);
         }
@@ -183,10 +205,10 @@ public:
             } else if (driver == TFTDriver::ILI9488) {
                 cfg.memory_width  = 320;
                 cfg.memory_height = 480;
-                cfg.panel_width   = 240;
-                cfg.panel_height  = 240;
-                cfg.offset_x      = 40;
-                cfg.offset_y      = 120;
+                cfg.panel_width   = 320;   // full native panel (landscape via rotation)
+                cfg.panel_height  = 480;
+                cfg.offset_x      = 0;
+                cfg.offset_y      = 0;
             } else {
                 cfg.memory_width  = 240;
                 cfg.memory_height = 240;
@@ -195,7 +217,9 @@ public:
                 cfg.offset_x      = 0;
                 cfg.offset_y      = 0;
             }
-            cfg.offset_rotation = 0;
+            // ILI9488 3.5" modules ship X-mirrored vs the ST7789 default and are
+            // mounted landscape; rotation 5 = 90° + horizontal mirror-correct.
+            cfg.offset_rotation = (driver == TFTDriver::ILI9488) ? 5 : 0;
             cfg.dummy_read_pixel = 8;
             cfg.dummy_read_bits  = 1;
             cfg.readable     = false;
@@ -203,7 +227,11 @@ public:
                                    ? false : true;
             cfg.rgb_order    = false;
             cfg.dlen_16bit   = false;
+#if defined(BOARD_SHARED_SPI)
+            cfg.bus_shared   = true;
+#else
             cfg.bus_shared   = false;
+#endif
             panel->config(cfg);
         }
 

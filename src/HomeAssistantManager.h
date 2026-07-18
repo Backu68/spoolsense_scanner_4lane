@@ -70,7 +70,10 @@ private:
     static constexpr uint32_t MAX_RECONNECT_DELAY = 30000;
 
     static constexpr size_t QUEUE_SIZE = 12;
-    static constexpr size_t TASK_STACK_SIZE = 8192;
+    // 8192 left only ~560 bytes free on IDF 5.5 (fatter stack frames from the
+    // GCC 14 toolchain + kernel bookkeeping); bumped for margin per the
+    // Arduino 3.x migration bench measurement.
+    static constexpr size_t TASK_STACK_SIZE = 10240;
     static constexpr UBaseType_t TASK_PRIORITY = 2;
 
     // Device ID cache

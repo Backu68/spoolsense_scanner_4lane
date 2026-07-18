@@ -5,6 +5,7 @@
 #include <WebServer.h>
 #include <ArduinoJson.h>
 #include <HTTPClient.h>
+#include <WiFiClient.h>
 #endif
 
 #include "NFCTypes.h"
