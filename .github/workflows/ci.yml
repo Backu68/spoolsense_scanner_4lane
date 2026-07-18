@@ -40,3 +40,5 @@ jobs:
         run: cp include/UserConfig.example.h include/UserConfig.h
       - name: Build
         run: pio run -e ${{ matrix.env }}
+      - name: Flash budget
+        run: python scripts/check_flash_budget.py ${{ matrix.env }}
