@@ -1026,7 +1026,16 @@ void WebServerManager::handleApiPostConfig() {
 void WebServerManager::handleApiVersion() {
     StaticJsonDocument<128> doc;
     doc["version"] = FIRMWARE_VERSION;
-#ifdef BOARD_ESP32_S3
+    // Matches the PlatformIO env / release-asset naming for each target.
+#if defined(BOARD_ESP32_C6)
+    doc["board"] = "esp32c6";
+#elif defined(BOARD_ESP32_C5)
+    doc["board"] = "esp32c5";
+#elif defined(BOARD_ESP32_C3)
+    doc["board"] = "esp32c3";
+#elif defined(BOARD_S3_DEVKITC)
+    doc["board"] = "esp32s3devkitc";
+#elif defined(BOARD_ESP32_S3)
     doc["board"] = "esp32s3zero";
 #else
     doc["board"] = "esp32dev";
