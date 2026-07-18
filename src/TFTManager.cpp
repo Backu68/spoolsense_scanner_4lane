@@ -457,7 +457,7 @@ void TFTManager::renderReady() {
     // Idle spool graphic: grey fill indicates no spool selected (waiting for tag)
     int cx = _sprite.width() / 2;
     int cy = _sprite.height() / 2 + 10;
-    drawSpool(cx, cy, 70, 28, COLOR_SPOOL_RIM);  // grey color = idle state
+    drawSpoolImage(_sprite, cx, cy, 0x888888, 0, 150);  // neutral grey idle spool
 
     // Prompt
     _sprite.setTextColor(COLOR_SUBTEXT);
@@ -490,7 +490,7 @@ void TFTManager::renderSpoolScanned(const DisplaySpoolData& spool) {
     uint32_t fillColor = hexToRgb(spool.colorHex);
     int cx = W / 2;
     int cy = 110;
-    drawSpool(cx, cy, 68, 26, fillColor);
+    drawSpoolImage(_sprite, cx, cy, fillColor, 0, 150);
 
     // ---- Text area ----
     int textY = 190;
@@ -526,17 +526,20 @@ void TFTManager::renderSpoolScanned(const DisplaySpoolData& spool) {
 // shading) while the dark reel/hub stay neutral grey; luminance 0 = background
 // (skipped -> shows the black panel). Integer math only (C6 has no FPU).
 // yOffset lets one call fill a strip band; rows outside the canvas are skipped.
-void TFTManager::drawSpoolImage(LGFX_Sprite& canvas, int cx, int cy, uint32_t tint, int yOffset) {
-    const int w = SPOOL_IMG_W, h = SPOOL_IMG_H;
+void TFTManager::drawSpoolImage(LGFX_Sprite& canvas, int cx, int cy, uint32_t tint, int yOffset,
+                                int size) {
+    const int w = size > 0 ? size : SPOOL_IMG_W;
+    const int h = w;  // square source
     const int x0 = cx - w / 2, y0 = cy - h / 2;
     const int cr = (tint >> 16) & 0xFF, cg = (tint >> 8) & 0xFF, cb = tint & 0xFF;
     const int chH = canvas.height();
     for (int iy = 0; iy < h; iy++) {
         int destY = y0 + iy - yOffset;
         if (destY < 0 || destY >= chH) continue;   // outside this band/canvas
-        const uint8_t* row = &SPOOL_IMG_LUM[iy * w];
+        const int srcY = iy * SPOOL_IMG_H / h;     // nearest-neighbor sample
+        const uint8_t* row = &SPOOL_IMG_LUM[srcY * SPOOL_IMG_W];
         for (int ix = 0; ix < w; ix++) {
-            int l = pgm_read_byte(&row[ix]);
+            int l = pgm_read_byte(&row[ix * SPOOL_IMG_W / w]);
             if (!l) continue;                       // transparent
             int t = (l - 60) * 256 / 140;           // tint strength 0..256
             if (t < 0) t = 0; else if (t > 256) t = 256;
@@ -874,39 +877,6 @@ void TFTManager::renderKeypadEntry(const char* toolNumber) {
 // Drawing helpers
 // ---------------------------------------------------------------------------
 
-void TFTManager::drawSpool(int cx, int cy, int outerR, int innerR, uint32_t fillColor) {
-    // Soft shadow for depth perception
-    _sprite.fillCircle(cx + 3, cy + 3, outerR, 0x111111);
-
-    // Outer rim (dark grey ring)
-    _sprite.fillCircle(cx, cy, outerR, COLOR_SPOOL_RIM);
-
-    // Filament fill: inner area up to rim shows spool color (matches tag data)
-    // Spokes drawn on top create visual separation between filled area and hub
-    _sprite.fillCircle(cx, cy, outerR - 5, fillColor);
-
-    // Hub (inner dark circle) — represents spool spindle
-    _sprite.fillCircle(cx, cy, innerR, COLOR_SPOOL_HUB);
-
-    // Spokes: 6 radial lines simulate spool structure; improves visual clarity at small scales
-    for (int i = 0; i < 6; i++) {
-        float angle = i * (M_PI / 3.0f);  // 60° spacing
-        int x1 = cx + (int)(cos(angle) * (innerR - 2));
-        int y1 = cy + (int)(sin(angle) * (innerR - 2));
-        int x2 = cx + (int)(cos(angle) * (outerR - 8));
-        int y2 = cy + (int)(sin(angle) * (outerR - 8));
-        _sprite.drawLine(x1, y1, x2, y2, COLOR_SPOOL_RIM);
-        _sprite.drawLine(x1+1, y1, x2+1, y2, COLOR_SPOOL_RIM);  // 2px wide for visibility
-    }
-
-    // Rim outline: crisp edge between spool and background
-    _sprite.drawCircle(cx, cy, outerR, 0x666666);
-    _sprite.drawCircle(cx, cy, outerR - 1, 0x555555);
-
-    // Hub outline and center dot: focal point for visual balance
-    _sprite.drawCircle(cx, cy, innerR, 0x555555);
-    _sprite.fillCircle(cx, cy, 4, 0x888888);  // spindle center
-}
 
 void TFTManager::drawWeightBar(int x, int y, int w, int h,
                                 float remaining, float total) {

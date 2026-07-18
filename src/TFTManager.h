@@ -137,7 +137,6 @@ private:
     void renderKeypadEntry(const char* toolNumber);
 
     // --- Drawing helpers ---
-    void drawSpool(int cx, int cy, int outerR, int innerR, uint32_t fillColor);
     void drawWeightBar(int x, int y, int w, int h, float remaining, float total);
     void drawTagIcon(uint8_t tagType, int x, int y);
     void blitCanvas();  // push _sprite at the panel-aware (centered on wide panels) origin
@@ -150,7 +149,9 @@ private:
     void drawStatusBar(LGFX_Sprite& canvas, int yOffset);                       // shared top bar
     // Tinted 3D spool image: coil takes `tint` (brightness-gated), reel stays
     // neutral. (cx,cy) is the screen-space center; yOffset is the strip band.
-    void drawSpoolImage(LGFX_Sprite& canvas, int cx, int cy, uint32_t tint, int yOffset);
+    // `size` scales the source map (nearest-neighbor); SPOOL_IMG_W = native.
+    void drawSpoolImage(LGFX_Sprite& canvas, int cx, int cy, uint32_t tint, int yOffset,
+                        int size = 0);
     void drawWifiBars(LGFX_Sprite& canvas, int x, int y, int rssi, bool connected);
     uint32_t hexToRgb(const char* hex);
     uint32_t dimColor(uint32_t color, uint8_t brightness); // for low-spool breathing
