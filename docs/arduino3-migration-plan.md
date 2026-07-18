@@ -334,7 +334,7 @@ Shared-SPI regression gate:
   IRQ/GPIO/AUX are `-1` and optional in the connection setup.
 - **C5 TFT compile-enabled 2026-07-13 (hardware validation pending).** The C5
   env now sets `BOARD_SHARED_SPI` with the pin map SCK GPIO6, MOSI GPIO8, NFC
-  MISO GPIO9/NSS GPIO10, TFT CS GPIO4/DC GPIO5/RST GPIO12.
+  MISO GPIO9/NSS GPIO10, TFT CS GPIO4/DC GPIO5/RST GPIO23.
   `scripts/patch_lovyangfx_c5.py` (a `pre:` extra_script on the esp32c5 env)
   applies upstream's sanctioned aliasing (issue #700) to the env-local
   LovyanGFX copy at build time: the C6 device profile also matches C5, every

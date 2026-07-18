@@ -26,7 +26,7 @@ CS; firmware-driven HIGH is not a substitute during reset.
 | PN5180 RST / PN532 RST | 0 | 0 |
 | TFT CS | 3 | 4 |
 | TFT DC | 11 | 5 |
-| TFT RST | 18 | 12 |
+| TFT RST | 18 | 23 |
 | TFT MISO / backlight | disconnected / tied as required | disconnected / tied as required |
 | PN5180 IRQ / GPIO / AUX | not connected | not connected |
 

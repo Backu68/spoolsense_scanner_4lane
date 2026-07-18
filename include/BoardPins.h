@@ -159,7 +159,7 @@
   #define PIN_TFT_MISO     -1
   #define PIN_TFT_CS       4
   #define PIN_TFT_DC       5
-  #define PIN_TFT_RST      12
+  #define PIN_TFT_RST      23  // GPIO12 is the header's UART RX; 23 is free on all revisions
   #define PIN_TFT_BL       -1
 
 #elif defined(BOARD_ESP32_C3)
