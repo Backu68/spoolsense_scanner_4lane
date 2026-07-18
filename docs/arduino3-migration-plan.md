@@ -346,7 +346,7 @@ Shared-SPI regression gate:
   aborts the build. `src/esp32c5_gpio_periph_compat.c` supplies the
   `GPIO_PIN_MUX_REG[]` table that C5's prebuilt libsoc.a omits (declared by
   the common soc header; built from the SDK's own `IO_MUX_GPIO<n>_REG`
-  macros). Flash is 94.9% on the 4 MB part. The C5-takes-C6-register-branch
+  macros). Flash is 62.5% of the 3MB OTA slot (partitions_8mb.csv on the 8MB module). The C5-takes-C6-register-branch
   assumption is compile-proven only — rendering correctness, NFC coexistence,
   and soaks are pending on a real C5 DevKitC-1.
   - **Patch history:** the aliasing was initially deferred because there was no

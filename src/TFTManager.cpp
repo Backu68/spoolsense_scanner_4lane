@@ -363,7 +363,10 @@ void TFTManager::processQueue() {
     }
 
     // Breathing animation: smooth pulse between 30 and 255 brightness; updates every BREATH_STEP_MS
-    if (_isBreathing && (millis() - _lastBreathMs >= BREATH_STEP_MS)) {
+    taskENTER_CRITICAL(&_stateMux);
+    bool breathOff = _screenOff;   // a breath tick must not wake a timed-out screen
+    taskEXIT_CRITICAL(&_stateMux);
+    if (!breathOff && _isBreathing && (millis() - _lastBreathMs >= BREATH_STEP_MS)) {
         _lastBreathMs = millis();
         int16_t next = (int16_t)_breathBrightness + _breathDirection * 3;
         // Clamp bounds and reverse direction at limits

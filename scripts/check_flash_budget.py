@@ -6,7 +6,7 @@ Usage: check_flash_budget.py <env> [max_percent]
 Reads the app0 partition size from partitions.csv and compares it against
 .pio/build/<env>/firmware.bin. An image over the threshold (default 97%)
 fails the build — better a red PR than a target that can no longer fit an
-OTA update. ESP32-C5 is the tightest board (~95% as of 1.9.0).
+OTA update. ESP32-C3 is the tightest board (~96% as of 1.9.0).
 """
 import csv
 import os
