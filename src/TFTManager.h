@@ -153,6 +153,7 @@ private:
     void drawSpoolImage(LGFX_Sprite& canvas, int cx, int cy, uint32_t tint, int yOffset,
                         int size = 0);
     void drawWifiBars(LGFX_Sprite& canvas, int x, int y, int rssi, bool connected);
+    void drawWifiIcon240();  // signal bars in the 240x240 header's top-right
     uint32_t hexToRgb(const char* hex);
     uint32_t dimColor(uint32_t color, uint8_t brightness); // for low-spool breathing
 

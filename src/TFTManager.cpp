@@ -377,10 +377,20 @@ void TFTManager::processQueue() {
     // Keep the idle status bar live: on wide panels, while showing the Ready
     // screen, repaint just the header band every few seconds so WiFi/HA/printer
     // changes appear without a scan. (Cheap header-only strip; own bus guard.)
-    if (_wide && _currentState == TFTState::Ready &&
+    if (_currentState == TFTState::Ready &&
         (millis() - _lastStatusRefreshMs >= STATUS_REFRESH_MS)) {
         _lastStatusRefreshMs = millis();
-        refreshStatusBar();
+        if (_wide) {
+            refreshStatusBar();
+        } else {
+            taskENTER_CRITICAL(&_stateMux);
+            bool off = _screenOff;
+            taskEXIT_CRITICAL(&_stateMux);
+            if (!off) {
+                SharedSPIBus::Guard g;  // no-op on separate-bus boards
+                if (g) renderReady();   // repaints the header's WiFi icon
+            }
+        }
     }
 
     // Screen timeout: turn off after inactivity period if configured (timeoutMs > 0)
@@ -453,6 +463,7 @@ void TFTManager::renderReady() {
     _sprite.setTextSize(1);
     _sprite.setTextDatum(MC_DATUM);
     _sprite.drawString("SpoolSense", _sprite.width() / 2, 14);
+    drawWifiIcon240();
 
     // Idle spool graphic: grey fill indicates no spool selected (waiting for tag)
     int cx = _sprite.width() / 2;
@@ -485,6 +496,7 @@ void TFTManager::renderSpoolScanned(const DisplaySpoolData& spool) {
     _sprite.setTextSize(1);
     _sprite.setTextDatum(MC_DATUM);
     _sprite.drawString("SpoolSense", _sprite.width() / 2, 14);
+    drawWifiIcon240();
 
     // ---- Spool graphic ----
     uint32_t fillColor = hexToRgb(spool.colorHex);
@@ -570,6 +582,13 @@ void TFTManager::drawWifiBars(LGFX_Sprite& canvas, int x, int y, int rssi, bool 
 
 // Shared top bar: "SpoolSense" + WiFi/HA/Printer status. Status is queried live
 // (bool reads / WiFi calls are safe from the TFT task).
+// Same signal-bars indicator as the landscape status bar, sized for the
+// 240x240 header (top-right corner).
+void TFTManager::drawWifiIcon240() {
+    bool up = (WiFi.status() == WL_CONNECTED);
+    drawWifiBars(_sprite, _sprite.width() - 26, 22, up ? (int)WiFi.RSSI() : -127, up);
+}
+
 void TFTManager::drawStatusBar(LGFX_Sprite& canvas, int yOffset) {
     LandscapeLayout L = landscapeLayout(480, 320);
     auto Y = [&](int y){ return y - yOffset; };
@@ -794,6 +813,7 @@ void TFTManager::renderStatus(const char* line1, const char* line2) {
     _sprite.setTextSize(1);
     _sprite.setTextDatum(MC_DATUM);
     _sprite.drawString("SpoolSense", _sprite.width() / 2, 14);
+    drawWifiIcon240();
 
     int cy = _sprite.height() / 2;
     _sprite.setTextColor(COLOR_TEXT);
@@ -817,6 +837,7 @@ void TFTManager::renderWriteResult(bool success, const char* tagFormat) {
     _sprite.setTextSize(1);
     _sprite.setTextDatum(MC_DATUM);
     _sprite.drawString("SpoolSense", _sprite.width() / 2, 14);
+    drawWifiIcon240();
 
     int cx = _sprite.width() / 2;
     int cy = _sprite.height() / 2;
@@ -856,6 +877,7 @@ void TFTManager::renderKeypadEntry(const char* toolNumber) {
     _sprite.setTextSize(1);
     _sprite.setTextDatum(MC_DATUM);
     _sprite.drawString("SpoolSense", _sprite.width() / 2, 14);
+    drawWifiIcon240();
 
     int cx = _sprite.width() / 2;
     _sprite.setTextColor(COLOR_SUBTEXT);
