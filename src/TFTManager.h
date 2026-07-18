@@ -1,5 +1,42 @@
 #pragma once
 
+#if defined(BOARD_NO_TFT)
+
+#include <Arduino.h>
+#include "DisplayI.h"
+
+// C5/C6 have one general-purpose SPI bus, reserved for NFC. Keeping a tiny
+// compile-time stub lets shared application code remain board-agnostic while
+// the build omits LovyanGFX and all TFT implementation objects.
+enum class TFTDriver : uint8_t { ST7789, GC9A01, ILI9341, ILI9488 };
+
+class TFTManager : public DisplayI {
+public:
+    explicit TFTManager(TFTDriver = TFTDriver::ST7789) {}
+    void begin() {}
+    void startTask() {}
+    void showBoot(const char*) {}
+    void showWifiConnecting() {}
+    void showWifiConnected(const char*) {}
+    void showReady() {}
+    void showSpoolScanned(const DisplaySpoolData&) {}
+    void showWriting(const char*) {}
+    void showWriteResult(bool, const char*) override {}
+    void showKeypadEntry(const char*) {}
+    void showError(const char*) {}
+    void freeForOTA() override {}
+    void updateOTAProgress(uint8_t) override {}
+    void showOTAError(const char*) override {}
+    void setScreenTimeoutMs(uint32_t) override {}
+    void showText(const char*, const char* = nullptr) override {}
+    void showText4(const char*, const char*, const char*, const char*) override {}
+    void showSpool(const DisplaySpoolData&) override {}
+    void showKeypad(const char*) override {}
+    void showTrayDashboard(const TrayDashboardState&) override {}
+};
+
+#else
+
 #include <Arduino.h>
 #include <LovyanGFX.hpp>
 #include "BoardPins.h"
@@ -7,6 +44,7 @@
 #include "DisplayI.h"
 #include "TrayDashboardTypes.h"
 #include "TFTDashboard.h"
+#include "TFTLandscapeLayout.h"
 
 // Tag type constants — one icon per type
 #define TAG_TYPE_UNKNOWN      0
@@ -89,14 +127,33 @@ private:
     void renderBoot(const char* version);
     void renderReady();
     void renderSpoolScanned(const DisplaySpoolData& spool);
+    void renderSpoolScannedLandscape(const DisplaySpoolData& spool);  // ILI9488 480x320
+    void renderReadyLandscape();                                      // ILI9488 idle screen
+    void renderTextLandscape(const char* l1, const char* l2, uint32_t l1Color);  // ILI9488 status text
+    void renderLandscapeFrame(const DisplaySpoolData* spool);         // shared backend (nullptr=idle)
+    void refreshStatusBar();                                          // periodic header-only update
     void renderStatus(const char* line1, const char* line2 = nullptr);
     void renderWriteResult(bool success, const char* tagFormat);
     void renderKeypadEntry(const char* toolNumber);
 
     // --- Drawing helpers ---
-    void drawSpool(int cx, int cy, int outerR, int innerR, uint32_t fillColor);
     void drawWeightBar(int x, int y, int w, int h, float remaining, float total);
     void drawTagIcon(uint8_t tagType, int x, int y);
+    void blitCanvas();  // push _sprite at the panel-aware (centered on wide panels) origin
+    // Draw the full 480x320 landscape layout into any canvas, shifting all Y by
+    // -yOffset (so one function fills a full sprite or a strip band).
+    void drawLandscapeSpool(LGFX_Sprite& canvas, int yOffset, const DisplaySpoolData& spool);
+    void drawLandscapeReady(LGFX_Sprite& canvas, int yOffset);                 // idle body
+    void drawLandscapeText(LGFX_Sprite& canvas, int yOffset,
+                           const char* line1, const char* line2, uint32_t line1Color);  // status text body
+    void drawStatusBar(LGFX_Sprite& canvas, int yOffset);                       // shared top bar
+    // Tinted 3D spool image: coil takes `tint` (brightness-gated), reel stays
+    // neutral. (cx,cy) is the screen-space center; yOffset is the strip band.
+    // `size` scales the source map (nearest-neighbor); SPOOL_IMG_W = native.
+    void drawSpoolImage(LGFX_Sprite& canvas, int cx, int cy, uint32_t tint, int yOffset,
+                        int size = 0);
+    void drawWifiBars(LGFX_Sprite& canvas, int x, int y, int rssi, bool connected);
+    void drawWifiIcon240();  // signal bars in the 240x240 header's top-right
     uint32_t hexToRgb(const char* hex);
     uint32_t dimColor(uint32_t color, uint8_t brightness); // for low-spool breathing
 
@@ -107,6 +164,12 @@ private:
 
     QueueHandle_t _messageQueue;
     TaskHandle_t _taskHandle;
+    bool _began = false;  // panel + bus initialized; render task must not start otherwise
+    bool _wide = false;   // panel larger than 240x240 (ILI9488) — landscape-capable
+    int  _blitOx = 0;     // centered-blit origin for the 240x240 sprite on wide panels
+    int  _blitOy = 0;
+    TFTState _currentState = TFTState::Boot;   // last-rendered state (drives idle status refresh)
+    unsigned long _lastStatusRefreshMs = 0;    // throttles the periodic status-bar redraw
 
     uint32_t _screenTimeoutMs;
     unsigned long _lastActivityMs;
@@ -123,4 +186,7 @@ private:
 
     static constexpr uint32_t DEFAULT_SCREEN_TIMEOUT_MS = 30000;
     static constexpr uint32_t BREATH_STEP_MS = 20;
+    static constexpr uint32_t STATUS_REFRESH_MS = 4000;  // idle status-bar redraw interval
 };
+
+#endif // BOARD_NO_TFT

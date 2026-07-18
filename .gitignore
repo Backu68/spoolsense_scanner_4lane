@@ -36,3 +36,4 @@ lancedb/
 
 # Generated gzipped web assets (built by scripts/gen_gzip_assets.py)
 src/gen/
+docs/spool.png

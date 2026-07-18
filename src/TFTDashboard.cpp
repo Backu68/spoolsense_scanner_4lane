@@ -59,7 +59,7 @@ void TFTDashboard::renderCell(LGFX_Sprite* sprite, int x, int y, int w, int h,
     }
 }
 
-void TFTDashboard::render(LGFX_Sprite* sprite, const TrayDashboardState& state) {
+void TFTDashboard::render(LGFX_Sprite* sprite, const TrayDashboardState& state, int offX, int offY) {
     sprite->fillScreen(0x000000);
 
     if (state.tray_count == 0) {
@@ -67,7 +67,7 @@ void TFTDashboard::render(LGFX_Sprite* sprite, const TrayDashboardState& state) 
         sprite->setTextDatum(MC_DATUM);
         sprite->setTextSize(2);
         sprite->drawString("No Trays", 120, 120);
-        sprite->pushSprite(0, 0);
+        sprite->pushSprite(offX, offY);
         return;
     }
 
@@ -98,5 +98,5 @@ void TFTDashboard::render(LGFX_Sprite* sprite, const TrayDashboardState& state) 
         }
     }
 
-    sprite->pushSprite(0, 0);
+    sprite->pushSprite(offX, offY);
 }

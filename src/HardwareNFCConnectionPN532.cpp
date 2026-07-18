@@ -2,12 +2,13 @@
 #include "ConfigurationManager.h"
 #include "openprinttag_adafruit_pn532.h"
 #include "BoardPins.h"
+#include "SharedSPIBus.h"
 
 #include <Arduino.h>
 #include <SPI.h>
 
-// PN532 ISO14443A NFC reader (4-byte and 7-byte tags: NTAG, MIFARE). Operates on separate SPI bus
-// from PN5180. Adafruit_PN532 stores response data in file-scope global buffer; after readPassiveTargetID,
+// PN532 ISO14443A NFC reader (4-byte and 7-byte tags: NTAG, MIFARE). Adafruit_PN532 stores response
+// data in a file-scope global buffer; after readPassiveTargetID,
 // ATQA and SAK extracted from bytes 9-10 and 11 respectively.
 extern byte pn532_packetbuffer[];
 
@@ -21,8 +22,8 @@ HardwareNFCConnectionPN532::~HardwareNFCConnectionPN532() {
 }
 
 bool HardwareNFCConnectionPN532::begin() {
-    // PN532 uses separate SPI bus; explicit pin mapping prevents conflicts with PN5180 on HSPI
-    // Runtime pin overrides (#201): PN532 shares the NFC pin slots (SS=NSS; BUSY unused)
+    // Runtime pin overrides (#201): PN532 shares the NFC pin slots (SS=NSS; BUSY unused).
+    // BOARD_SHARED_SPI injects the same global bus used by the TFT.
     {
         auto& cfg = ConfigurationManager::getInstance();
         pinRst_ = cfg.getNfcPin(NfcPinId::Rst);
@@ -31,9 +32,24 @@ bool HardwareNFCConnectionPN532::begin() {
         pinMosi_ = cfg.getNfcPin(NfcPinId::Mosi);
         pinMiso_ = cfg.getNfcPin(NfcPinId::Miso);
     }
+#if defined(BOARD_SHARED_SPI)
+    if (!SharedSPIBus::begin(pinSck_, pinMiso_, pinMosi_, pinSs_, PIN_TFT_CS)) {
+        Serial.println("PN532: shared SPI initialization failed");
+        return false;
+    }
+    SPIClass* spiBus = &SharedSPIBus::bus();
+#else
     SPI.begin(pinSck_, pinMiso_, pinMosi_, pinSs_);
+    SPIClass* spiBus = &SPI;
+#endif
 
-    pn532_ = new Adafruit_PN532(pinSs_, &SPI);
+    SharedSPIBus::Guard spiGuard;
+    if (!spiGuard) {
+        Serial.println("PN532: shared SPI lock timeout during initialization");
+        return false;
+    }
+
+    pn532_ = new Adafruit_PN532(pinSs_, spiBus);
     if (!pn532_) {
         Serial.println("PN532: Failed to allocate");
         return false;
@@ -74,6 +90,11 @@ bool HardwareNFCConnectionPN532::begin() {
 
 void HardwareNFCConnectionPN532::reset() {
     if (pn532_) {
+        SharedSPIBus::Guard spiGuard;
+        if (!spiGuard) {
+            Serial.println("PN532: shared SPI lock timeout during reset");
+            return;
+        }
         // Soft reset: reinit SPI comms and re-enable detection mode
         pn532_->begin();
         if (!pn532_->SAMConfig()) {
@@ -83,6 +104,12 @@ void HardwareNFCConnectionPN532::reset() {
 }
 
 bool HardwareNFCConnectionPN532::hardwareReset() {
+    SharedSPIBus::Guard spiGuard;
+    if (!spiGuard) {
+        Serial.println("PN532: shared SPI lock timeout during hardware reset");
+        return false;
+    }
+
     // Toggle RST pin for hardware reset: forces state machine reboot
     pinMode(pinRst_, OUTPUT);
     digitalWrite(pinRst_, LOW);
@@ -106,6 +133,8 @@ bool HardwareNFCConnectionPN532::setupRF() {
 
 bool HardwareNFCConnectionPN532::detectTag(uint8_t* uid, uint8_t* uidLength) {
     if (!pn532_ || !ready_) return false;
+    SharedSPIBus::Guard spiGuard;
+    if (!spiGuard) return false;
 
     // 100ms timeout is safe compromise: detects tags fast enough for scan loop, but avoids
     // blocking on non-responsive tags or noise that causes readPassiveTargetID to hang
@@ -135,6 +164,8 @@ opt_nfc_hal_t* HardwareNFCConnectionPN532::getHal() {
 
 bool HardwareNFCConnectionPN532::reactivateTag() {
     if (!pn532_) return false;
+    SharedSPIBus::Guard spiGuard;
+    if (!spiGuard) return false;
     uint8_t uid[10];
     uint8_t uidLen = 0;
     if (!pn532_->readPassiveTargetID(PN532_MIFARE_ISO14443A, uid, &uidLen, 200))
@@ -149,6 +180,8 @@ bool HardwareNFCConnectionPN532::reactivateTag() {
 uint16_t HardwareNFCConnectionPN532::readISO14443Pages(
     uint8_t startPage, uint8_t pageCount, uint8_t* buffer, uint16_t bufferSize, bool /*keepSession*/) {
     if (!pn532_ || !ready_) return 0;
+    SharedSPIBus::Guard spiGuard;
+    if (!spiGuard) return 0;
 
     uint16_t totalBytes = (uint16_t)pageCount * 4;
     if (totalBytes > bufferSize) return 0;
@@ -187,6 +220,8 @@ uint16_t HardwareNFCConnectionPN532::readISO14443Pages(
 bool HardwareNFCConnectionPN532::writeISO14443Pages(
     uint8_t startPage, uint8_t pageCount, const uint8_t* data, uint16_t dataLen) {
     if (!pn532_ || !ready_) return false;
+    SharedSPIBus::Guard spiGuard;
+    if (!spiGuard) return false;
 
     uint16_t requiredLen = (uint16_t)pageCount * 4;
     if (dataLen < requiredLen) return false;
@@ -240,6 +275,11 @@ void HardwareNFCConnectionPN532::logDiagnostics() {
         Serial.println("PN532: Not initialized");
         return;
     }
+    SharedSPIBus::Guard spiGuard;
+    if (!spiGuard) {
+        Serial.println("PN532: shared SPI lock timeout during diagnostics");
+        return;
+    }
     // Re-read firmware version to verify SPI comms still working
     uint32_t ver = pn532_->getFirmwareVersion();
     if (ver) {
@@ -252,6 +292,8 @@ void HardwareNFCConnectionPN532::logDiagnostics() {
 
 bool HardwareNFCConnectionPN532::mifareAuthenticate(uint8_t blockNo, uint8_t keyType, const uint8_t* key) {
     if (!pn532_ || !ready_) return false;
+    SharedSPIBus::Guard spiGuard;
+    if (!spiGuard) return false;
     uint8_t keyNumber = (keyType == 0x61) ? 1 : 0;
     return pn532_->mifareclassic_AuthenticateBlock(
         currentUid_, currentUidLen_, blockNo, keyNumber, const_cast<uint8_t*>(key));
@@ -259,11 +301,15 @@ bool HardwareNFCConnectionPN532::mifareAuthenticate(uint8_t blockNo, uint8_t key
 
 bool HardwareNFCConnectionPN532::mifareClassicRead(uint8_t blockNo, uint8_t* buffer) {
     if (!pn532_ || !ready_) return false;
+    SharedSPIBus::Guard spiGuard;
+    if (!spiGuard) return false;
     return pn532_->mifareclassic_ReadDataBlock(blockNo, buffer);
 }
 
 bool HardwareNFCConnectionPN532::ntagGetVersion(uint8_t* versionOut) {
     if (!pn532_ || !ready_ || !versionOut) return false;
+    SharedSPIBus::Guard spiGuard;
+    if (!spiGuard) return false;
 
     uint8_t cmd = 0x60;  // NTAG GET_VERSION command
     uint8_t response[8];

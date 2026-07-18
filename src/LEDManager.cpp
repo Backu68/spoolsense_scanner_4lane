@@ -4,6 +4,7 @@
 
 #include "LEDManager.h"
 #include "UserConfig.h"
+#include "TaskUtils.h"
 
 #include <cstdlib>
 #include <cmath>
@@ -17,7 +18,7 @@
 #define M_PI 3.14159265f
 #endif
 
-#if defined(BOARD_S3_DEVKITC)
+#if defined(BOARD_S3_DEVKITC) || defined(BOARD_ESP32_C5) || defined(BOARD_ESP32_C6)
 // DevKitC WS2812B requires GRB byte order instead of standard RGB
 LEDManager::LEDManager()
     : _initialized(false), _taskStarted(false), _pixel(1, 0, NEO_GRB + NEO_KHZ800) {}
@@ -33,7 +34,7 @@ LEDManager::LEDManager()
 
 void LEDManager::begin(uint8_t pin) {
     // Reconfirm color order in case of pin conflicts that forced constructor re-init
-#if defined(BOARD_S3_DEVKITC)
+#if defined(BOARD_S3_DEVKITC) || defined(BOARD_ESP32_C5) || defined(BOARD_ESP32_C6)
     _pixel.updateType(NEO_GRB + NEO_KHZ800);
 #elif defined(BOARD_ESP32_S3)
     _pixel.updateType(NEO_RGB + NEO_KHZ800);
@@ -53,8 +54,12 @@ void LEDManager::startTask() {
     _mutex = xSemaphoreCreateMutex();
     if (_mutex == nullptr) return;
     // Core 1 for animation task — keeps UI responsive on Core 0
-    xTaskCreatePinnedToCore(ledTaskFunc, "LEDTask", 2048, this, 1, &_taskHandle, 1);
-    _taskStarted = true;
+    if (createTaskWithAffinity(ledTaskFunc, "LEDTask", 2048, this, 1, &_taskHandle, 1) == pdPASS) {
+        _taskStarted = true;
+    } else {
+        _taskHandle = nullptr;
+        Serial.println("LEDManager: ERROR — task creation failed");
+    }
 #endif
 }
 

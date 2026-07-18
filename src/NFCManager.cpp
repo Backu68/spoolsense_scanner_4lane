@@ -11,7 +11,9 @@
   #include "SpoolmanManager.h"
   #include "LogBuffer.h"
   #include "MemoryDiagnostics.h"
+  #include "TaskUtils.h"
   #include <Arduino.h>
+  #include <esp_arduino_version.h>
 #else
   #include "platform/NativePlatform.h"
   #include "FakeLCDManager.h"
@@ -200,7 +202,7 @@ bool NFCManager::waitForScanPaused(uint32_t timeoutMs) {
 }
 
 void NFCManager::startScanTask() {
-    xTaskCreatePinnedToCore(
+    BaseType_t created = createTaskWithAffinity(
         scanTaskFunc,
         "NFCScanTask",
         8192,
@@ -209,6 +211,11 @@ void NFCManager::startScanTask() {
         &scanTaskHandle,
         1  // Run on core 1
     );
+    if (created != pdPASS) {
+        scanTaskHandle = nullptr;
+        Serial.println("NFCManager: ERROR — scan task creation failed");
+        return;
+    }
     Serial.println("NFCManager: Scan task started");
     reportWdtPhaseIfCrashed();
 }
@@ -653,8 +660,28 @@ void NFCManager::scanLoop() {
     Serial.println("NFCManager: scanLoop() started, polling every 50ms");
 
 #ifndef NATIVE_TEST
-    esp_task_wdt_init(NFC_WDT_TIMEOUT_S, true);
-    esp_task_wdt_add(NULL);
+  #if ESP_ARDUINO_VERSION_MAJOR >= 3
+    // Arduino initializes the TWDT before setup(). Its sdkconfig does not
+    // subscribe idle tasks, so retain idle_core_mask=0 while changing only the
+    // timeout/panic policy used by NFC crash forensics.
+    const esp_task_wdt_config_t wdtConfig = {
+        .timeout_ms = NFC_WDT_TIMEOUT_S * 1000U,
+        .idle_core_mask = 0,
+        .trigger_panic = true,
+    };
+    esp_err_t wdtErr = esp_task_wdt_reconfigure(&wdtConfig);
+  #else
+    esp_err_t wdtErr = esp_task_wdt_init(NFC_WDT_TIMEOUT_S, true);
+  #endif
+    if (wdtErr != ESP_OK) {
+        Serial.printf("NFCManager: ERROR — TWDT configuration failed: %s (%d)\n",
+                      esp_err_to_name(wdtErr), static_cast<int>(wdtErr));
+    }
+    wdtErr = esp_task_wdt_add(NULL);
+    if (wdtErr != ESP_OK) {
+        Serial.printf("NFCManager: ERROR — TWDT subscription failed: %s (%d)\n",
+                      esp_err_to_name(wdtErr), static_cast<int>(wdtErr));
+    }
 #endif
 
     connection_->reset();

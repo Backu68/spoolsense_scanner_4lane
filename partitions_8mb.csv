@@ -1,0 +1,8 @@
+# 8MB-flash targets with no legacy fleet (ESP32-C6, ESP32-C5): 3MB OTA slots.
+# Legacy boards keep partitions.csv — a partition table can never change via
+# OTA, so their 1.92MB slots are frozen by the installed base.
+# Name,   Type, SubType, Offset,   Size
+nvs,      data, nvs,     0x9000,   0x5000
+otadata,  data, ota,     0xe000,   0x2000
+app0,     app,  ota_0,   0x10000,  0x300000
+app1,     app,  ota_1,   0x310000, 0x300000

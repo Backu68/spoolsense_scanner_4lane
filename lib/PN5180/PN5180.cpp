@@ -22,6 +22,10 @@
 #include <SPI.h>
 #include "PN5180.h"
 #include "Debug.h"
+#include "../../include/SharedSPIBus.h"
+#if defined(BOARD_SHARED_SPI)
+  #include "../../include/BoardPins.h"
+#endif
 
 // Use HSPI for PN5180 so VSPI is free for TFT display
 // Bus choice is per-target: HSPI is the SPI2 peripheral on classic ESP32 but
@@ -33,11 +37,39 @@
 #ifndef PN5180_SPI_BUS
   #if CONFIG_IDF_TARGET_ESP32S3
     #define PN5180_SPI_BUS FSPI  // bus 0 = SPI2 — matches the FSPI pin naming in BoardPins.h
+  #elif CONFIG_IDF_TARGET_ESP32C3 || CONFIG_IDF_TARGET_ESP32C5 || CONFIG_IDF_TARGET_ESP32C6
+    #define PN5180_SPI_BUS FSPI  // the C3/C5/C6 expose one general-purpose SPI host
   #else
     #define PN5180_SPI_BUS HSPI  // SPI2 on classic ESP32
   #endif
 #endif
-static SPIClass pn5180_spi(PN5180_SPI_BUS);
+#if defined(BOARD_SHARED_SPI)
+  // The TFT initializes Arduino's global SPI handle first when enabled. NFC
+  // injects that same handle instead of constructing a second SPIClass that
+  // would reset the single GP-SPI peripheral.
+  #define pn5180_spi SharedSPIBus::bus()
+#else
+  static SPIClass pn5180_spi(PN5180_SPI_BUS);
+#endif
+
+class PN5180SPITransaction {
+public:
+  PN5180SPITransaction(SPIClass& spi, const SPISettings& settings)
+      : guard_(), spi_(spi), active_(static_cast<bool>(guard_)) {
+    if (active_) spi_.beginTransaction(settings);
+  }
+
+  ~PN5180SPITransaction() {
+    if (active_) spi_.endTransaction();
+  }
+
+  explicit operator bool() const { return active_; }
+
+private:
+  SharedSPIBus::Guard guard_;
+  SPIClass& spi_;
+  bool active_;
+};
 
 // PN5180 1-Byte Direct Commands
 // see 11.4.3.3 Host Interface Command List
@@ -83,11 +115,18 @@ void PN5180::begin() {
   digitalWrite(PN5180_NSS, HIGH); // disable
   digitalWrite(PN5180_RST, HIGH); // no reset
 
+#if defined(BOARD_SHARED_SPI)
+  if (!SharedSPIBus::begin(PN5180_SCK, PN5180_MISO, PN5180_MOSI,
+                           PN5180_NSS, PIN_TFT_CS)) {
+    Serial.println("PN5180: shared SPI initialization failed");
+  }
+#else
   if (PN5180_SCK >= 0 && PN5180_MISO >= 0 && PN5180_MOSI >= 0) {
     pn5180_spi.begin(PN5180_SCK, PN5180_MISO, PN5180_MOSI);
   } else {
     pn5180_spi.begin();
   }
+#endif
   PN5180DEBUG(F("SPI pinout: "));
   PN5180DEBUG(F("SS=")); PN5180DEBUG(PN5180_NSS);
   PN5180DEBUG(F(", MOSI=")); PN5180DEBUG(PN5180_MOSI);
@@ -98,7 +137,9 @@ void PN5180::begin() {
 
 void PN5180::end() {
   digitalWrite(PN5180_NSS, HIGH); // disable
+#if !defined(BOARD_SHARED_SPI)
   pn5180_spi.end();
+#endif
 }
 
 /*
@@ -126,9 +167,7 @@ bool PN5180::writeRegister(uint8_t reg, uint32_t value) {
    */
   uint8_t buf[6] = { PN5180_WRITE_REGISTER, reg, p[0], p[1], p[2], p[3] };
 
-  pn5180_spi.beginTransaction(PN5180_SPI_SETTINGS);
   bool ok = transceiveCommand(buf, 6);
-  pn5180_spi.endTransaction();
 
   return ok;
 }
@@ -156,9 +195,7 @@ bool PN5180::writeRegisterWithOrMask(uint8_t reg, uint32_t mask) {
 
   uint8_t buf[6] = { PN5180_WRITE_REGISTER_OR_MASK, reg, p[0], p[1], p[2], p[3] };
 
-  pn5180_spi.beginTransaction(PN5180_SPI_SETTINGS);
   bool ok = transceiveCommand(buf, 6);
-  pn5180_spi.endTransaction();
 
   return ok;
 }
@@ -186,9 +223,7 @@ bool PN5180::writeRegisterWithAndMask(uint8_t reg, uint32_t mask) {
 
   uint8_t buf[6] = { PN5180_WRITE_REGISTER_AND_MASK, reg, p[0], p[1], p[2], p[3] };
 
-  pn5180_spi.beginTransaction(PN5180_SPI_SETTINGS);
   bool ok = transceiveCommand(buf, 6);
-  pn5180_spi.endTransaction();
 
   return ok;
 }
@@ -208,9 +243,7 @@ bool PN5180::readRegister(uint8_t reg, uint32_t *value) {
   uint8_t cmd[2] = { PN5180_READ_REGISTER, reg };
 
   *value = 0;  // never leave stale data on a failed transceive
-  pn5180_spi.beginTransaction(PN5180_SPI_SETTINGS);
   bool ok = transceiveCommand(cmd, 2, (uint8_t*)value, 4);
-  pn5180_spi.endTransaction();
   if (!ok) {
     *value = 0;
     return false;
@@ -245,9 +278,7 @@ bool PN5180::readRegister(uint8_t reg, uint32_t *value) {
      buffer[2+i] = data[i];
    }
 
-   pn5180_spi.beginTransaction(PN5180_SPI_SETTINGS);
    bool ok = transceiveCommand(buffer, len+2);
-   pn5180_spi.endTransaction();
 
    return ok;
  }
@@ -277,9 +308,7 @@ bool PN5180::readEEprom(uint8_t addr, uint8_t *buffer, int len) {
 
   uint8_t cmd[3] = { PN5180_READ_EEPROM, addr, (uint8_t)len };
 
-  pn5180_spi.beginTransaction(PN5180_SPI_SETTINGS);
   bool eepromOk = transceiveCommand(cmd, 3, buffer, len);
-  pn5180_spi.endTransaction();
   if (!eepromOk) return false;
 
 #ifdef DEBUG
@@ -345,9 +374,7 @@ bool PN5180::sendData(uint8_t *data, int len, uint8_t validBits) {
     return false;
   }
 
-  pn5180_spi.beginTransaction(PN5180_SPI_SETTINGS);
   bool ok = transceiveCommand(buffer, len+2);
-  pn5180_spi.endTransaction();
 
   return ok;
 }
@@ -377,9 +404,7 @@ uint8_t * PN5180::readData(int len, uint8_t *buffer /* = NULL */) {
 
   uint8_t cmd[2] = { PN5180_READ_DATA, 0x00 };
 
-  pn5180_spi.beginTransaction(PN5180_SPI_SETTINGS);
   bool readOk = transceiveCommand(cmd, 2, buffer, len);
-  pn5180_spi.endTransaction();
   if (!readOk) return 0L;
 
 #ifdef DEBUG
@@ -421,9 +446,7 @@ bool PN5180::loadRFConfig(uint8_t txConf, uint8_t rxConf) {
 
   uint8_t cmd[3] = { PN5180_LOAD_RF_CONFIG, txConf, rxConf };
 
-  pn5180_spi.beginTransaction(PN5180_SPI_SETTINGS);
   bool ok = transceiveCommand(cmd, 3);
-  pn5180_spi.endTransaction();
 
   return ok;
 }
@@ -443,9 +466,7 @@ bool PN5180::mfcAuthenticate(const uint8_t *key, uint8_t keyType, uint8_t blockN
   memcpy(&cmd[9], uid, 4);
 
   uint8_t response = 0xFF;
-  pn5180_spi.beginTransaction(PN5180_SPI_SETTINGS);
   bool ok = transceiveCommand(cmd, 13, &response, 1);
-  pn5180_spi.endTransaction();
 
   if (!ok || response != 0x00) {
     Serial.printf("PN5180: mfcAuthenticate block %d failed (ok=%d resp=0x%02X)\n", blockNo, ok, response);
@@ -466,9 +487,7 @@ bool PN5180::setRF_on() {
 
   uint8_t cmd[2] = { PN5180_RF_ON, 0x00 };
 
-  pn5180_spi.beginTransaction(PN5180_SPI_SETTINGS);
   bool rfOk = transceiveCommand(cmd, 2);
-  pn5180_spi.endTransaction();
   if (!rfOk) return false;
 
   {
@@ -503,9 +522,7 @@ bool PN5180::setRF_off() {
 
   uint8_t cmd[2] { PN5180_RF_OFF, 0x00 };
 
-  pn5180_spi.beginTransaction(PN5180_SPI_SETTINGS);
   bool rfOffOk = transceiveCommand(cmd, 2);
-  pn5180_spi.endTransaction();
   if (!rfOffOk) return false;
 
   {
@@ -582,6 +599,15 @@ bool PN5180::isBusWedged() {
 
 bool PN5180::transceiveCommand(uint8_t *sendBuffer, size_t sendBufferLen, uint8_t *recvBuffer, size_t recvBufferLen) {
   if (pn5180_busWedged) return false;
+
+  // Hold the board-level recursive guard for the complete logical command,
+  // including all bounded BUSY waits. This prevents the TFT or PN532 from
+  // changing host settings between the command and response frames.
+  PN5180SPITransaction transaction(pn5180_spi, PN5180_SPI_SETTINGS);
+  if (!transaction) {
+    Serial.println("PN5180: shared SPI lock timeout");
+    return false;
+  }
 #ifdef DEBUG
   PN5180DEBUG(F("Sending SPI frame: '"));
   for (uint8_t i=0; i<sendBufferLen; i++) {

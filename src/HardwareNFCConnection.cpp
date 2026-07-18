@@ -85,9 +85,11 @@ void HardwareNFCConnection::getReaderInfo(char* buf, size_t len) const {
 
 bool HardwareNFCConnection::begin() {
     // Configure additional input pins for future use
-    pinMode(PIN_PN5180_IRQ, INPUT);    // Interrupt monitoring (active HIGH, unused currently)
-    pinMode(PIN_PN5180_GPIO, INPUT);   // Card detection (unused, manual polling via getInventory)
-    pinMode(PIN_PN5180_AUX, INPUT);    // Auxiliary/monitoring (unused)
+    // Shared-SPI boards use explicit -1 sentinels for signals that are not
+    // connected, preserving scarce GPIOs for the TFT control lines.
+    if (PIN_PN5180_IRQ >= 0) pinMode(PIN_PN5180_IRQ, INPUT);
+    if (PIN_PN5180_GPIO >= 0) pinMode(PIN_PN5180_GPIO, INPUT);
+    if (PIN_PN5180_AUX >= 0) pinMode(PIN_PN5180_AUX, INPUT);
 
     // Runtime pin overrides (#201): board defaults unless remapped in config
     {
