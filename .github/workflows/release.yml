@@ -33,6 +33,7 @@ jobs:
       - name: Build + stage ESP32-WROOM
         run: |
           pio run -e esp32dev
+          python scripts/check_flash_budget.py esp32dev
           mkdir -p release
           cp .pio/build/esp32dev/firmware.bin   release/spoolsense_scanner_esp32dev.bin
           cp .pio/build/esp32dev/bootloader.bin release/bootloader_esp32dev.bin
@@ -41,6 +42,7 @@ jobs:
       - name: Build + stage ESP32-S3-Zero
         run: |
           pio run -e esp32s3zero
+          python scripts/check_flash_budget.py esp32s3zero
           cp .pio/build/esp32s3zero/firmware.bin   release/spoolsense_scanner_esp32s3zero.bin
           cp .pio/build/esp32s3zero/bootloader.bin release/bootloader_esp32s3zero.bin
           cp .pio/build/esp32s3zero/partitions.bin release/partitions_esp32s3zero.bin
@@ -48,6 +50,7 @@ jobs:
       - name: Build + stage ESP32-S3-DevKitC
         run: |
           pio run -e esp32s3devkitc
+          python scripts/check_flash_budget.py esp32s3devkitc
           cp .pio/build/esp32s3devkitc/firmware.bin   release/spoolsense_scanner_esp32s3devkitc.bin
           cp .pio/build/esp32s3devkitc/bootloader.bin release/bootloader_esp32s3devkitc.bin
           cp .pio/build/esp32s3devkitc/partitions.bin release/partitions_esp32s3devkitc.bin
@@ -55,6 +58,7 @@ jobs:
       - name: Build + stage ESP32-C3
         run: |
           pio run -e esp32c3
+          python scripts/check_flash_budget.py esp32c3
           cp .pio/build/esp32c3/firmware.bin   release/spoolsense_scanner_esp32c3.bin
           cp .pio/build/esp32c3/bootloader.bin release/bootloader_esp32c3.bin
           cp .pio/build/esp32c3/partitions.bin release/partitions_esp32c3.bin
@@ -62,6 +66,7 @@ jobs:
       - name: Build + stage ESP32-C6
         run: |
           pio run -e esp32c6
+          python scripts/check_flash_budget.py esp32c6
           cp .pio/build/esp32c6/firmware.bin   release/spoolsense_scanner_esp32c6.bin
           cp .pio/build/esp32c6/bootloader.bin release/bootloader_esp32c6.bin
           cp .pio/build/esp32c6/partitions.bin release/partitions_esp32c6.bin
@@ -69,15 +74,10 @@ jobs:
       - name: Build + stage ESP32-C5
         run: |
           pio run -e esp32c5
+          python scripts/check_flash_budget.py esp32c5
           cp .pio/build/esp32c5/firmware.bin   release/spoolsense_scanner_esp32c5.bin
           cp .pio/build/esp32c5/bootloader.bin release/bootloader_esp32c5.bin
           cp .pio/build/esp32c5/partitions.bin release/partitions_esp32c5.bin
-
-      - name: Flash budget check
-        run: |
-          for e in esp32dev esp32s3zero esp32s3devkitc esp32c3 esp32c6 esp32c5; do
-            python scripts/check_flash_budget.py "$e"
-          done
 
       - name: Prepare release artifacts
         run: |
