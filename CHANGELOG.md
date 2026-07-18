@@ -12,8 +12,13 @@
 
 - **ESP32-C6 and ESP32-C5 DevKitC-1 targets** — firmware environments, validated NFC board pin maps, onboard RGB LED support, CI builds, and release artifacts. Both targets support PN5180/PN532 NFC, I2C LCD, and the full network/web feature set; keypad remains disabled.
 - **Capability-gated shared SPI on ESP32-C6** — a write-only TFT and either PN5180 or PN532 use one initialized GP-SPI host, distinct fail-safe chip selects, and a recursive bounded transaction guard. Validated on C6 hardware with an ILI9488.
-- **Landscape dashboard for the 3.5" ILI9488 (480×320)** — full-screen landscape scanned-spool view with a tinted 3D spool image (the coil takes the scanned filament colour, the reel stays neutral), FreeSans typography, a persistent WiFi/Home-Assistant/printer status bar that stays live while idle, and landscape scan-progress/status screens. Renders via a ~30 KB strip pipeline on no-PSRAM boards or a full 16-bit framebuffer with PSRAM; 240×240 boards are unchanged.
+- **Landscape dashboard for the 3.5" ILI9488 (480×320)** — full-screen landscape scanned-spool view with a tinted 3D spool image (the coil takes the scanned filament colour, the reel stays neutral), FreeSans typography, a persistent WiFi/Home-Assistant/printer status bar that stays live while idle, and landscape scan-progress/status screens. Renders via a ~30 KB strip pipeline on no-PSRAM boards or a full 16-bit framebuffer with PSRAM.
+- **Refreshed 240×240 screens (ST7789/GC9A01)** — the scanned and idle views use the same tinted 3D spool image as the large display, and every screen shows a live WiFi signal indicator in the header.
 - **ESP32-C5 shared-SPI TFT (compile-enabled)** — `scripts/patch_lovyangfx_c5.py` applies LovyanGFX upstream's sanctioned ESP32-C5 aliasing (issue #700) to the pinned 1.2.21 release at build time, fail-closed against version or text drift, plus a C5 AHB-DMA register mapping and the `GPIO_PIN_MUX_REG` table the C5 SDK omits. Hardware validation pending.
+
+### Fixed
+
+- `/api/version` now reports the correct board on every target (S3-DevKitC, C3, C6, and C5 previously misreported as `esp32s3zero`/`esp32dev`).
 
 ### Changed
 
