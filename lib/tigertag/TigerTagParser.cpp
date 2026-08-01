@@ -166,9 +166,10 @@ bool tigerTagCheckMagic(const uint8_t* data, uint16_t dataLen) {
     }
 
     // Permissive mode: unknown version ID but layout looks like TigerTag.
-    // Check Type field (byte 13) = Filament or Resin, and Material (bytes 8-9) is non-zero.
+    // Check Type field (byte 12) = Filament or Resin, and Material (bytes 8-9) is non-zero.
     // TigerTag's docs/app may produce version IDs not yet in the public database.
-    uint8_t typeField = data[13];
+    // Byte 12 is the type field; byte 13 is diameter (see the layout map below).
+    uint8_t typeField = data[12];
     uint16_t materialId = (data[8] << 8) | data[9];
     if ((typeField == TIGERTAG_TYPE_FILAMENT || typeField == TIGERTAG_TYPE_RESIN) && materialId != 0) {
         return true;

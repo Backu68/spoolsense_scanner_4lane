@@ -8,7 +8,7 @@ OPT_OBJS = openprinttag_lib.o cbor_native.o
 
 .PHONY: all clean test
 
-all: test_printer_manager test_opt_ndef_bounds test_diagnostics test_tft_landscape_layout
+all: test_printer_manager test_opt_ndef_bounds test_diagnostics test_tft_landscape_layout test_tigertag_parser
 
 openprinttag_lib.o: ../../lib/openprinttag/openprinttag_lib.c
 	$(CC) $(CFLAGS) -c -o $@ $<
@@ -28,8 +28,11 @@ test_diagnostics: test_diagnostics.cpp ../../src/DiagnosticsUtil.cpp ../../src/D
 test_tft_landscape_layout: test_tft_landscape_layout.cpp ../../src/TFTLandscapeLayout.cpp ../../src/TFTLandscapeLayout.h
 	$(CXX) $(CXXFLAGS) -o $@ test_tft_landscape_layout.cpp ../../src/TFTLandscapeLayout.cpp
 
+test_tigertag_parser: test_tigertag_parser.cpp ../../lib/tigertag/TigerTagParser.cpp ../../lib/tigertag/TigerTagParser.h
+	$(CXX) $(CXXFLAGS) -o $@ test_tigertag_parser.cpp ../../lib/tigertag/TigerTagParser.cpp
 
-test: test_printer_manager test_opt_ndef_bounds test_diagnostics test_tft_landscape_layout
+
+test: test_printer_manager test_opt_ndef_bounds test_diagnostics test_tft_landscape_layout test_tigertag_parser
 	@echo ""
 	@echo "=== Running PrinterManager tests ==="
 	@./test_printer_manager
@@ -43,12 +46,10 @@ test: test_printer_manager test_opt_ndef_bounds test_diagnostics test_tft_landsc
 	@echo "=== Running Landscape layout tests ==="
 	@./test_tft_landscape_layout
 	@echo ""
-
-clean:
-	rm -f test_printer_manager test_opt_ndef_bounds test_diagnostics *.o
-	@echo "=== Running Diagnostics tests ==="
-	@./test_diagnostics
+	@echo "=== Running TigerTag parser tests ==="
+	@./test_tigertag_parser
 	@echo ""
 
 clean:
-	rm -f test_printer_manager test_diagnostics *.o
+	rm -f test_printer_manager test_opt_ndef_bounds test_diagnostics \
+	      test_tft_landscape_layout test_tigertag_parser *.o
