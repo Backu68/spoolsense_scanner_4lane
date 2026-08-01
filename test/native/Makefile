@@ -8,7 +8,7 @@ OPT_OBJS = openprinttag_lib.o cbor_native.o
 
 .PHONY: all clean test
 
-all: test_printer_manager test_opt_ndef_bounds test_diagnostics test_tft_landscape_layout test_tigertag_parser
+all: test_printer_manager test_opt_ndef_bounds test_diagnostics test_tft_landscape_layout test_tigertag_parser test_bambutag_parser
 
 openprinttag_lib.o: ../../lib/openprinttag/openprinttag_lib.c
 	$(CC) $(CFLAGS) -c -o $@ $<
@@ -31,8 +31,11 @@ test_tft_landscape_layout: test_tft_landscape_layout.cpp ../../src/TFTLandscapeL
 test_tigertag_parser: test_tigertag_parser.cpp ../../lib/tigertag/TigerTagParser.cpp ../../lib/tigertag/TigerTagParser.h
 	$(CXX) $(CXXFLAGS) -o $@ test_tigertag_parser.cpp ../../lib/tigertag/TigerTagParser.cpp
 
+test_bambutag_parser: test_bambutag_parser.cpp ../../lib/bambutag/BambuTagParser.cpp ../../lib/bambutag/BambuTagParser.h
+	$(CXX) $(CXXFLAGS) -o $@ test_bambutag_parser.cpp ../../lib/bambutag/BambuTagParser.cpp
 
-test: test_printer_manager test_opt_ndef_bounds test_diagnostics test_tft_landscape_layout test_tigertag_parser
+
+test: test_printer_manager test_opt_ndef_bounds test_diagnostics test_tft_landscape_layout test_tigertag_parser test_bambutag_parser
 	@echo ""
 	@echo "=== Running PrinterManager tests ==="
 	@./test_printer_manager
@@ -49,7 +52,10 @@ test: test_printer_manager test_opt_ndef_bounds test_diagnostics test_tft_landsc
 	@echo "=== Running TigerTag parser tests ==="
 	@./test_tigertag_parser
 	@echo ""
+	@echo "=== Running Bambu parser tests ==="
+	@./test_bambutag_parser
+	@echo ""
 
 clean:
 	rm -f test_printer_manager test_opt_ndef_bounds test_diagnostics \
-	      test_tft_landscape_layout test_tigertag_parser *.o
+	      test_tft_landscape_layout test_tigertag_parser test_bambutag_parser *.o
