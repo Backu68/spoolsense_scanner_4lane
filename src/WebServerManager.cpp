@@ -1911,6 +1911,11 @@ void WebServerManager::handleApiWriteOpenSpool() {
     memset(&req, 0, sizeof(req));
     req.request_id = NFCManager::getInstance().generateRequestId();
     req.type = NFCWriteType::WRITE_OPENSPOOL;
+    // Bind the write to the UID the page detected when Write was pressed,
+    // exactly as the TigerTag and OpenTag3D handlers do. Without it
+    // validateWriteUid() accepts whatever tag happens to be present, so a tag
+    // swapped in after that detection receives this payload.
+    strncpy(req.expected_spool_id, doc["uid"] | "", sizeof(req.expected_spool_id) - 1);
 
     if (!NFCManager::getInstance().enqueueRawWrite(req, (const uint8_t*)jsonPayload, (size_t)jsonLen)) {
         sendError(503, "Write queue full or busy");
