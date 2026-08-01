@@ -805,7 +805,7 @@ bool NFCManager::readAndParseTag(uint8_t* uid, uint8_t uid_length) {
     currentSpool.present = true;
     currentSpool.tag_data_valid = true;
 
-    addToRecentSpools();
+    addToRecentSpoolsLocked();
 
     Serial.printf("NFCManager: Parsed spool %s\n", currentSpool.spool_id);
 
@@ -913,7 +913,7 @@ bool NFCManager::formatNewSpool() {
                 currentSpool.tag_data_valid = true;
                 currentSpool.blank_tag_present = false;
                 currentSpool.kind = TagKind::OpenPrintTag;
-                addToRecentSpools();
+                addToRecentSpoolsLocked();
 
                 // Check if write queue is empty (no batched writes pending)
                 NFCWriteRequest dummyReq;
@@ -957,7 +957,7 @@ bool NFCManager::formatNewSpool() {
     currentSpool.tag_data_valid = true;
     currentSpool.blank_tag_present = false;
     currentSpool.kind = TagKind::OpenPrintTag;
-    addToRecentSpools();
+    addToRecentSpoolsLocked();
 
     // Check if write queue is empty (no batched writes pending)
     NFCWriteRequest dummyReq2;
@@ -1704,7 +1704,7 @@ bool NFCManager::writeRawTag() {
                 currentSpool.blank_tag_present = false;
                 currentSpool.kind = TagKind::OpenPrintTag;
                 lastSeenValid = false;  // Force re-detection on next scan
-                addToRecentSpools();
+                addToRecentSpoolsLocked();
                 sendOpenPrintTagMessage();
                 xSemaphoreGive(tagMutex);
 
@@ -1737,7 +1737,7 @@ bool NFCManager::writeRawTag() {
     currentSpool.blank_tag_present = false;
     currentSpool.kind = TagKind::OpenPrintTag;
     lastSeenValid = false;
-    addToRecentSpools();
+    addToRecentSpoolsLocked();
     sendOpenPrintTagMessage();
     xSemaphoreGive(tagMutex);
 
@@ -2197,7 +2197,7 @@ bool NFCManager::executeAtomicWrite(const NFCWriteRequest& request) {
     currentSpool.tag_data_valid = true;
     currentSpool.blank_tag_present = false;
     currentSpool.kind = TagKind::OpenPrintTag;
-    addToRecentSpools();
+    addToRecentSpoolsLocked();
     sendOpenPrintTagMessage();
     xSemaphoreGive(tagMutex);
 
@@ -2304,7 +2304,7 @@ bool NFCManager::executeWrite(const NFCWriteRequest& request) {
                 currentSpool.blank_tag_present = false;
                 currentSpool.kind = TagKind::OpenPrintTag;
                 lastSeenValid = false;
-                addToRecentSpools();
+                addToRecentSpoolsLocked();
                 sendOpenPrintTagMessage();
                 xSemaphoreGive(tagMutex);
                 return true;
@@ -2490,14 +2490,14 @@ void NFCManager::requestCurrentSpool() {
     }
 }
 
-void NFCManager::addToRecentSpools() {
-    if (tagMutex == nullptr) return;
-    if (xSemaphoreTake(tagMutex, pdMS_TO_TICKS(50)) != pdTRUE) return;
-
-    if (!currentSpool.tag_data_valid) {
-        xSemaphoreGive(tagMutex);
-        return;
-    }
+// Caller must hold tagMutex. FreeRTOS mutexes are not recursive and every
+// call site already holds it around the currentSpool update this reads, so
+// taking it here only ever timed out — the history silently stopped updating
+// and each scan paid the timeout. Running under the caller's lock also closes
+// the race against getRecentSpools(), which reads the array under the mutex
+// while the tail of this function used to rewrite it unlocked.
+void NFCManager::addToRecentSpoolsLocked() {
+    if (!currentSpool.tag_data_valid) return;
 
     // Check if this spool already exists in recent list
     int existingIndex = -1;
@@ -2532,8 +2532,6 @@ void NFCManager::addToRecentSpools() {
     int32_t smId = -1;
     opt_get_gp_spoolman_id(&currentSpool.tag_data, &smId);
     newEntry.spoolman_id = smId;
-
-    xSemaphoreGive(tagMutex);
 
     if (existingIndex >= 0) {
         // Spool exists - shift entries to remove it from current position
