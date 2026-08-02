@@ -805,7 +805,7 @@ bool NFCManager::readAndParseTag(uint8_t* uid, uint8_t uid_length) {
     currentSpool.present = true;
     currentSpool.tag_data_valid = true;
 
-    addToRecentSpools();
+    addToRecentSpoolsLocked();
 
     Serial.printf("NFCManager: Parsed spool %s\n", currentSpool.spool_id);
 
@@ -913,7 +913,7 @@ bool NFCManager::formatNewSpool() {
                 currentSpool.tag_data_valid = true;
                 currentSpool.blank_tag_present = false;
                 currentSpool.kind = TagKind::OpenPrintTag;
-                addToRecentSpools();
+                addToRecentSpoolsLocked();
 
                 // Check if write queue is empty (no batched writes pending)
                 NFCWriteRequest dummyReq;
@@ -957,7 +957,7 @@ bool NFCManager::formatNewSpool() {
     currentSpool.tag_data_valid = true;
     currentSpool.blank_tag_present = false;
     currentSpool.kind = TagKind::OpenPrintTag;
-    addToRecentSpools();
+    addToRecentSpoolsLocked();
 
     // Check if write queue is empty (no batched writes pending)
     NFCWriteRequest dummyReq2;
@@ -1704,7 +1704,7 @@ bool NFCManager::writeRawTag() {
                 currentSpool.blank_tag_present = false;
                 currentSpool.kind = TagKind::OpenPrintTag;
                 lastSeenValid = false;  // Force re-detection on next scan
-                addToRecentSpools();
+                addToRecentSpoolsLocked();
                 sendOpenPrintTagMessage();
                 xSemaphoreGive(tagMutex);
 
@@ -1737,7 +1737,7 @@ bool NFCManager::writeRawTag() {
     currentSpool.blank_tag_present = false;
     currentSpool.kind = TagKind::OpenPrintTag;
     lastSeenValid = false;
-    addToRecentSpools();
+    addToRecentSpoolsLocked();
     sendOpenPrintTagMessage();
     xSemaphoreGive(tagMutex);
 
@@ -2197,7 +2197,7 @@ bool NFCManager::executeAtomicWrite(const NFCWriteRequest& request) {
     currentSpool.tag_data_valid = true;
     currentSpool.blank_tag_present = false;
     currentSpool.kind = TagKind::OpenPrintTag;
-    addToRecentSpools();
+    addToRecentSpoolsLocked();
     sendOpenPrintTagMessage();
     xSemaphoreGive(tagMutex);
 
@@ -2304,7 +2304,7 @@ bool NFCManager::executeWrite(const NFCWriteRequest& request) {
                 currentSpool.blank_tag_present = false;
                 currentSpool.kind = TagKind::OpenPrintTag;
                 lastSeenValid = false;
-                addToRecentSpools();
+                addToRecentSpoolsLocked();
                 sendOpenPrintTagMessage();
                 xSemaphoreGive(tagMutex);
                 return true;
@@ -2490,14 +2490,14 @@ void NFCManager::requestCurrentSpool() {
     }
 }
 
-void NFCManager::addToRecentSpools() {
-    if (tagMutex == nullptr) return;
-    if (xSemaphoreTake(tagMutex, pdMS_TO_TICKS(50)) != pdTRUE) return;
-
-    if (!currentSpool.tag_data_valid) {
-        xSemaphoreGive(tagMutex);
-        return;
-    }
+// Caller must hold tagMutex. FreeRTOS mutexes are not recursive and every
+// call site already holds it around the currentSpool update this reads, so
+// taking it here only ever timed out — the history silently stopped updating
+// and each scan paid the timeout. Running under the caller's lock also closes
+// the race against getRecentSpools(), which reads the array under the mutex
+// while the tail of this function used to rewrite it unlocked.
+void NFCManager::addToRecentSpoolsLocked() {
+    if (!currentSpool.tag_data_valid) return;
 
     // Check if this spool already exists in recent list
     int existingIndex = -1;
@@ -2532,8 +2532,6 @@ void NFCManager::addToRecentSpools() {
     int32_t smId = -1;
     opt_get_gp_spoolman_id(&currentSpool.tag_data, &smId);
     newEntry.spoolman_id = smId;
-
-    xSemaphoreGive(tagMutex);
 
     if (existingIndex >= 0) {
         // Spool exists - shift entries to remove it from current position
@@ -2682,32 +2680,62 @@ bool NFCManager::isWriteQueueEmpty() const {
 
 bool NFCManager::readBambuTag(const uint8_t* uid, uint8_t uidLength, BambuTagData& out) {
     BambuKeys keys = deriveBambuKeys(uid, uidLength);
-    uint8_t blocks[BAMBU_BLOCK_COUNT][16];
+    // Zero-initialized: a block that never reads must not reach the parser as
+    // stack garbage (it would publish random colour/weight/temperature).
+    uint8_t blocks[BAMBU_BLOCK_COUNT][16] = {};
+    bool blockOk[BAMBU_BLOCK_COUNT] = {};
     uint8_t lastAuthSector = 0xFF;
 
     for (uint8_t i = 0; i < BAMBU_BLOCK_COUNT; i++) {
         uint8_t blockNo = BAMBU_BLOCKS[i];
         uint8_t sector = blockNo / 4;
+        bool failed = false;
 
         if (sector != lastAuthSector) {
             if (!connection_->mifareAuthenticate(blockNo, 0x60, keys.blockKey(blockNo))) {
                 Serial.printf("NFCManager: Bambu auth failed on block %d (sector %d)\n", blockNo, sector);
                 LogBuffer::getInstance().logPrintf("Bambu auth fail blk %d sec %d\n", blockNo, sector);
-                if (i == 0) return false;
-                continue;
+                failed = true;
+            } else {
+                lastAuthSector = sector;
             }
-            lastAuthSector = sector;
         }
 
-        if (!connection_->mifareClassicRead(blockNo, blocks[i])) {
-            Serial.printf("NFCManager: Bambu block read failed on block %d\n", blockNo);
-            memset(blocks[i], 0, 16);
-        } else {
-            Serial.printf("NFCManager: Bambu block %d: ", blockNo);
-            for (int b = 0; b < 16; b++) Serial.printf("%02X ", blocks[i][b]);
-            Serial.println();
+        if (!failed) {
+            if (!connection_->mifareClassicRead(blockNo, blocks[i])) {
+                Serial.printf("NFCManager: Bambu block read failed on block %d\n", blockNo);
+                memset(blocks[i], 0, 16);
+                failed = true;
+            } else {
+                blockOk[i] = true;
+                Serial.printf("NFCManager: Bambu block %d: ", blockNo);
+                for (int b = 0; b < 16; b++) Serial.printf("%02X ", blocks[i][b]);
+                Serial.println();
+            }
+        }
+
+        // Blocks carrying identity and print-critical values must all be
+        // present: a partial read would publish a plausible-looking spool with
+        // the wrong colour, weight, or nozzle/bed temperatures — worse than no
+        // read at all. Stop at the first essential failure instead of working
+        // through the rest; on a shared SPI bus each further attempt can block
+        // for the bus-guard timeout, and the whole read is discarded anyway.
+        // The remaining blocks (4 unparsed, 13 date, 14 length, 16 extended
+        // colour) degrade to zeros without misrepresenting the filament.
+        if (failed) {
+            if (bambuIsEssentialIndex(i)) {
+                Serial.printf("NFCManager: Bambu essential block %d missing, discarding read\n", blockNo);
+                LogBuffer::getInstance().logPrintf("Bambu incomplete read blk %d\n", blockNo);
+                return false;
+            }
+            // Optional block: everything required is already in hand, so stop
+            // rather than spend more time on a tag that is clearly struggling.
+            Serial.printf("NFCManager: Bambu optional block %d missing, using partial data\n", blockNo);
+            break;
         }
     }
 
-    return parseBambuBlocks(blocks, out);
+    // parseBambuBlocks reports validity: a zeroed identity block is never
+    // published as a spool.
+    return bambuEssentialBlocksPresent(blockOk) && parseBambuBlocks(blocks, out);
 }

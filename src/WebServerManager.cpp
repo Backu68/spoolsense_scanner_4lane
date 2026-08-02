@@ -39,6 +39,9 @@
 // Shared HTTP mutex — serializes all outbound HTTP requests across tasks
 extern SemaphoreHandle_t g_httpMutex;
 static constexpr TickType_t HTTP_MUTEX_TIMEOUT = pdMS_TO_TICKS(10000);
+// Diagnostics polls from loopTask: prefer reporting "busy" over stalling the
+// loop waiting for a sync or printer poll to finish.
+static constexpr TickType_t DIAG_HTTP_MUTEX_TIMEOUT = pdMS_TO_TICKS(500);
 
 extern "C" {
 #include "openprinttag_lib.h"
@@ -785,23 +788,40 @@ void WebServerManager::handleApiDiagnostics() {
     spoolman["enabled"] = spoolmanEnabled;
     spoolman["url"]     = cfg.spoolman_url;
     if (spoolmanEnabled) {
-        // Quick reachability check — GET /api/v1/info
-        HTTPClient http;
-        char infoUrl[160];
-        snprintf(infoUrl, sizeof(infoUrl), "%s/api/v1/info", cfg.spoolman_url);
-        http.begin(infoUrl);
-        http.setTimeout(3000);
-        int code = http.GET();
-        spoolman["reachable"] = (code == 200);
-        if (code == 200) {
-            // Extract version from response
-            String body = http.getString();
-            StaticJsonDocument<256> info;
-            if (!deserializeJson(info, body) && info.containsKey("version")) {
-                spoolman["version"] = info["version"].as<const char*>();
+        // Outbound HTTP is serialized by g_httpMutex; this endpoint used to skip
+        // it, so opening the troubleshooting page during a Spoolman sync or
+        // printer poll ran a second client concurrently. Wait only briefly —
+        // the page auto-polls this from loopTask, so a long wait would stall the
+        // loop worse than the request it is guarding. If the path is busy,
+        // report that instead of a reachability verdict we did not measure.
+        bool held = g_httpMutex &&
+                    (xSemaphoreTake(g_httpMutex, DIAG_HTTP_MUTEX_TIMEOUT) == pdTRUE);
+        if (g_httpMutex && !held) {
+            spoolman["reachable"] = false;
+            spoolman["check_skipped"] = true;
+        } else {
+            // Quick reachability check — GET /api/v1/info
+            HTTPClient http;
+            char infoUrl[160];
+            snprintf(infoUrl, sizeof(infoUrl), "%s/api/v1/info", cfg.spoolman_url);
+            http.begin(infoUrl);
+            // Both timeouts: setTimeout is the read timeout, and the default
+            // 5s connect timeout would otherwise dominate the loop stall.
+            http.setConnectTimeout(2000);
+            http.setTimeout(3000);
+            int code = http.GET();
+            spoolman["reachable"] = (code == 200);
+            if (code == 200) {
+                // Extract version from response
+                String body = http.getString();
+                StaticJsonDocument<256> info;
+                if (!deserializeJson(info, body) && info.containsKey("version")) {
+                    spoolman["version"] = info["version"].as<const char*>();
+                }
             }
+            http.end();
+            if (held) xSemaphoreGive(g_httpMutex);
         }
-        http.end();
     } else {
         spoolman["reachable"] = false;
     }
@@ -1911,6 +1931,11 @@ void WebServerManager::handleApiWriteOpenSpool() {
     memset(&req, 0, sizeof(req));
     req.request_id = NFCManager::getInstance().generateRequestId();
     req.type = NFCWriteType::WRITE_OPENSPOOL;
+    // Bind the write to the UID the page detected when Write was pressed,
+    // exactly as the TigerTag and OpenTag3D handlers do. Without it
+    // validateWriteUid() accepts whatever tag happens to be present, so a tag
+    // swapped in after that detection receives this payload.
+    strncpy(req.expected_spool_id, doc["uid"] | "", sizeof(req.expected_spool_id) - 1);
 
     if (!NFCManager::getInstance().enqueueRawWrite(req, (const uint8_t*)jsonPayload, (size_t)jsonLen)) {
         sendError(503, "Write queue full or busy");

@@ -189,7 +189,7 @@ private:
     // Recent spools history (RAM only, most recent first)
     RecentSpoolEntry recentSpools[MAX_RECENT_SPOOLS];
     size_t recentSpoolsCount = 0;
-    void addToRecentSpools();
+    void addToRecentSpoolsLocked();  // caller must hold tagMutex
 
     // Last parsed TigerTag data (retained for /api/status)
     TigerTagData lastTigerTag_;
