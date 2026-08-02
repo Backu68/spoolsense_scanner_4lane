@@ -283,6 +283,9 @@ const char TROUBLESHOOTING_HTML[] PROGMEM = R"rawliteral(
           const s = d.spoolman;
           if (!s.enabled) {
             setCheck('spoolman', 'warn', 'Spoolman', 'Disabled in config');
+          } else if (s.check_skipped) {
+            setCheck('spoolman', 'warn', 'Spoolman',
+              'Check skipped &mdash; the scanner was busy with another request. Refresh to retry.');
           } else if (s.reachable) {
             setCheck('spoolman', 'pass', 'Spoolman',
               'Connected &mdash; ' + s.url + (s.version ? ' (v' + s.version + ')' : ''));

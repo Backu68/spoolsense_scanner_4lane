@@ -42,17 +42,16 @@
 #define EMD_CONTROL         (0x28)
 #define ANT_CONTROL         (0x29)
 
-// PN5180 EEPROM Addresses
-#define DIE_IDENTIFIER      (0x00)
-#define PRODUCT_VERSION     (0x10)
-#define FIRMWARE_VERSION    (0x12)
-#define EEPROM_VERSION      (0x14)
-#define IRQ_PIN_CONFIG      (0x1A)
-
-// Aliases for compatibility
-#define PN5180_FIRMWARE_VERSION FIRMWARE_VERSION
-#define PN5180_PRODUCT_VERSION  PRODUCT_VERSION
-#define PN5180_EEPROM_VERSION   EEPROM_VERSION
+// PN5180 EEPROM Addresses.
+// Prefixed: the unprefixed FIRMWARE_VERSION collided with the application's
+// release-string macro (-DFIRMWARE_VERSION="x.y.z"), warning on every build and
+// leaving whichever definition won to include order. Any use of the app macro
+// after this header would silently have compiled as the EEPROM address 0x12.
+#define DIE_IDENTIFIER          (0x00)
+#define PN5180_PRODUCT_VERSION  (0x10)
+#define PN5180_FIRMWARE_VERSION (0x12)
+#define PN5180_EEPROM_VERSION   (0x14)
+#define IRQ_PIN_CONFIG          (0x1A)
 
 enum PN5180TransceiveStat {
   PN5180_TS_Idle = 0,

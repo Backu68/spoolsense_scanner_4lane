@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.9.1] - 2026-08-01
+
+Correctness and responsiveness fixes from a full code review. No configuration
+changes; upgrade over OTA as usual.
+
+### Fixed
+
+- **TigerTag tags with newer version IDs were misread as plain UID tags** — the forward-compatibility fallback compared the diameter byte against the type constants, so any tag whose version ID was not yet in the public database fell through to generic-UID handling instead of being parsed. (#256)
+- **A partly-read Bambu tag could publish invented values** — an authentication failure mid-read left that block uninitialized and the parser consumed it anyway, so marginal coupling could report a random color, weight, diameter, or nozzle/bed temperature to Spoolman and the printer. Reads that miss an identity or print-critical block are now discarded, and a zeroed identity block is no longer published as a spool. (#257)
+- **Recent-spool history never updated, and every scan paid 50 ms for it** — the history helper tried to take a lock its callers already held, which cannot succeed on a non-recursive mutex, so each scan and write waited out the full timeout and then skipped the update. Scans get that time back. (#258)
+- **OpenSpool writes were not bound to the scanned tag** — unlike the other formats, the handler did not record which tag the write was for, so a tag swapped in after detection could receive the payload. (#259)
+- **Opening the troubleshooting page could stall the scanner** — its diagnostics request ran a live Spoolman check outside the lock that serializes outbound HTTP, colliding with a sync or printer poll in progress. The check is now serialized, with a short budget: when the connection is busy the page reports that instead of falsely claiming Spoolman is unreachable. (#262)
+- **Build warning on every target** — the PN5180 library defined `FIRMWARE_VERSION` as an EEPROM address, colliding with the firmware version string and burying real warnings. (#263)
+
 ## [1.9.0] - 2026-07-17
 
 ### Upgrade notes — read before updating

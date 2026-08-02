@@ -61,5 +61,21 @@ bool parseBambuBlocks(const uint8_t blocks[][16], BambuTagData& out) {
 
     out.valid = (out.filament_type[0] != '\0');
 
+    // Report validity: an all-zero or corrupt identity block must not be
+    // published as a spool (it would fall back to a default material).
+    return out.valid;
+}
+
+bool bambuIsEssentialIndex(uint8_t idx) {
+    for (uint8_t i = 0; i < BAMBU_ESSENTIAL_COUNT; i++) {
+        if (BAMBU_ESSENTIAL_INDEXES[i] == idx) return true;
+    }
+    return false;
+}
+
+bool bambuEssentialBlocksPresent(const bool blockOk[]) {
+    for (uint8_t i = 0; i < BAMBU_ESSENTIAL_COUNT; i++) {
+        if (!blockOk[BAMBU_ESSENTIAL_INDEXES[i]]) return false;
+    }
     return true;
 }

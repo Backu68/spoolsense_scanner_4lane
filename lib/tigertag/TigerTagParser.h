@@ -10,7 +10,7 @@
 #define TIGERTAG_INIT_V10       0x6C2B2DF1  // TigerTag Init V1.0
 #define TIGERTAG_PLUS_V10       0xBC0A5927  // TigerTag+ V1.0
 
-// Type field values (byte 13 in TigerTag layout)
+// Type field values (byte 12 in TigerTag layout; byte 13 is diameter)
 #define TIGERTAG_TYPE_FILAMENT  0x8E
 #define TIGERTAG_TYPE_RESIN     0xAD
 
