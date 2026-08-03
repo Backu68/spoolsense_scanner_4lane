@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.9.2] - 2026-08-03
+
+Write-path safety and OTA reliability fixes. No configuration changes;
+upgrade over OTA as usual.
+
+### Fixed
+
+- **Any OTA upload longer than 30 seconds was aborted by the task watchdog** — pausing NFC for the update suspended the scan task with `vTaskSuspend` without unsubscribing it from the task watchdog. That task is the firmware's only watchdog subscriber, and a suspended task can never feed its entry, so the watchdog panicked deterministically 30 seconds into any upload that held the pause. Fast transfers finished inside the window and masked the bug; slower clients hit it every time, and with no rollback the device reset mid-flash and quietly kept running the old firmware. The scan task is now unsubscribed from the watchdog across the pause and re-subscribed on resume. (#280)
+- **Writes are now validated against the tag actually selected on the reader this scan cycle** — the 3-second scan-cooldown dedup, which suppresses PN5180 partial-UID re-reads by matching only the first three UID bytes, could skip tag processing and leave the write guard comparing against the previous tag — letting a quickly-swapped, prefix-sharing tag receive another spool's payload. Bound writes now fail closed when no tag is selected, and atomic/field-update writes — which build their payload from the previously-read tag data — additionally require that data to belong to the bound tag. Affects all write formats. (#276)
+
+### Changed
+
+- **Shared-SPI boards (ESP32-C6, ESP32-C5) now run the PN5180 at 3.5 MHz instead of the 7 MHz datasheet maximum** — with a TFT loading the same SCK/MOSI lines, 7 MHz corrupted a double-digit percentage of UID reads on a C6 bench rig (FF-truncated and bit-flipped UIDs, some sharing enough prefix bytes to slip past the scan-cooldown dedup) while 3.5 MHz read 84/84 clean. The clock is now a build-time knob (`PN5180_SPI_HZ`, guarded to the 7 MHz datasheet ceiling), and the reader boot log prints the requested clock. Dedicated-bus boards keep 7 MHz.
+
 ## [1.9.1] - 2026-08-01
 
 Correctness and responsiveness fixes from a full code review. No configuration

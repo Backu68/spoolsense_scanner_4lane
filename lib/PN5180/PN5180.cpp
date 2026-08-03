@@ -103,8 +103,9 @@ PN5180::PN5180(uint8_t SSpin, uint8_t BUSYpin, uint8_t RSTpin,
    * extended by signal line BUSY. The maximum SPI speed is 7 Mbps and fixed to CPOL
    * = 0 and CPHA = 0.
    */
-  // Settings for PN5180: 7Mbps, MSB first, SPI_MODE0 (CPOL=0, CPHA=0)
-  PN5180_SPI_SETTINGS = SPISettings(7000000, MSBFIRST, SPI_MODE0);
+  // Settings for PN5180: PN5180_SPI_HZ (7Mbps default), MSB first, SPI_MODE0
+  // (CPOL=0, CPHA=0). Clock is overridable via build flag for bench diagnostics.
+  PN5180_SPI_SETTINGS = SPISettings(PN5180_SPI_HZ, MSBFIRST, SPI_MODE0);
 }
 
 void PN5180::begin() {
@@ -610,7 +611,7 @@ bool PN5180::transceiveCommand(uint8_t *sendBuffer, size_t sendBufferLen, uint8_
   }
 #ifdef DEBUG
   PN5180DEBUG(F("Sending SPI frame: '"));
-  for (uint8_t i=0; i<sendBufferLen; i++) {
+  for (size_t i=0; i<sendBufferLen; i++) {
     if (i>0) PN5180DEBUG(" ");
     PN5180DEBUG(formatHex(sendBuffer[i]));
   }
@@ -631,7 +632,7 @@ bool PN5180::transceiveCommand(uint8_t *sendBuffer, size_t sendBufferLen, uint8_
   // 1.
   digitalWrite(PN5180_NSS, LOW); delay(2);
   // 2.
-  for (uint8_t i=0; i<sendBufferLen; i++) {
+  for (size_t i=0; i<sendBufferLen; i++) {
     pn5180_spi.transfer(sendBuffer[i]);
   }
   // 3.
@@ -668,7 +669,7 @@ bool PN5180::transceiveCommand(uint8_t *sendBuffer, size_t sendBufferLen, uint8_
   // 1.
   digitalWrite(PN5180_NSS, LOW); delay(2);
   // 2.
-  for (uint8_t i=0; i<recvBufferLen; i++) {
+  for (size_t i=0; i<recvBufferLen; i++) {
     recvBuffer[i] = pn5180_spi.transfer(0xff);
   }
   // 3.
@@ -699,7 +700,7 @@ bool PN5180::transceiveCommand(uint8_t *sendBuffer, size_t sendBufferLen, uint8_
 
 #ifdef DEBUG
   PN5180DEBUG(F("Received: "));
-  for (uint8_t i=0; i<recvBufferLen; i++) {
+  for (size_t i=0; i<recvBufferLen; i++) {
     if (i > 0) PN5180DEBUG(" ");
     PN5180DEBUG(formatHex(recvBuffer[i]));
   }

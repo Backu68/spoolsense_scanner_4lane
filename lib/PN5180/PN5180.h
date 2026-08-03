@@ -21,6 +21,16 @@
 
 #include <SPI.h>
 
+// PN5180 datasheet 11.4.1: SPI maximum is 7 Mbps, fixed CPOL=0 / CPHA=0. The
+// default stays at the maximum; override with -DPN5180_SPI_HZ=<hz> for bench
+// diagnostics on marginal wiring (shared-bus breadboard rigs, long jumpers).
+#ifndef PN5180_SPI_HZ
+#define PN5180_SPI_HZ 7000000UL
+#endif
+#if PN5180_SPI_HZ < 1 || PN5180_SPI_HZ > 7000000
+#error "PN5180_SPI_HZ must be 1..7000000 — the PN5180 datasheet maximum is 7 Mbps"
+#endif
+
 // PN5180 Registers
 #define SYSTEM_CONFIG       (0x00)
 #define IRQ_ENABLE          (0x01)
