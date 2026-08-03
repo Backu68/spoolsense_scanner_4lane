@@ -2133,10 +2133,12 @@ bool NFCManager::executeAtomicWrite(const NFCWriteRequest& request) {
         xSemaphoreGive(tagMutex);
         return false;
     }
-    if (request.expected_spool_id[0] != '\0' &&
-        strcmp(currentSpool.spool_id, request.expected_spool_id) != 0) {
-        Serial.printf("NFCManager: WRITE_ATOMIC rejected: expected %s but found %s\n",
-            request.expected_spool_id, currentSpool.spool_id);
+    // Atomic writes rebuild the tag from currentSpool's CBOR, so the bound UID
+    // must match both the selected tag and the tag that data came from (#276).
+    if (!fieldUpdateWriteAllowed(request.expected_spool_id, selectedUidHex_, currentSpool.spool_id)) {
+        Serial.printf("NFCManager: WRITE_ATOMIC rejected - UID mismatch (expected %s, selected %s, spool %s)\n",
+            request.expected_spool_id,
+            selectedUidHex_[0] ? selectedUidHex_ : "<none>", currentSpool.spool_id);
         xSemaphoreGive(tagMutex);
         return false;
     }
@@ -2277,13 +2279,14 @@ bool NFCManager::executeWrite(const NFCWriteRequest& request) {
         return false;
     }
 
-    if (request.expected_spool_id[0] != '\0') {
-        if (strcmp(currentSpool.spool_id, request.expected_spool_id) != 0) {
-            Serial.printf("NFCManager: Write rejected: expected spool %s but found %s\n",
-                request.expected_spool_id, currentSpool.spool_id);
-            xSemaphoreGive(tagMutex);
-            return false;
-        }
+    // Field updates mutate currentSpool's CBOR in place, so the bound UID must
+    // match both the selected tag and the tag that data came from (#276).
+    if (!fieldUpdateWriteAllowed(request.expected_spool_id, selectedUidHex_, currentSpool.spool_id)) {
+        Serial.printf("NFCManager: write rejected - UID mismatch (expected %s, selected %s, spool %s)\n",
+            request.expected_spool_id,
+            selectedUidHex_[0] ? selectedUidHex_ : "<none>", currentSpool.spool_id);
+        xSemaphoreGive(tagMutex);
+        return false;
     }
 
     // Snapshot current tag into reusable scratch storage under mutex; do not mutate shared state until write succeeds.

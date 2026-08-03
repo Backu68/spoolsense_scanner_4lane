@@ -46,6 +46,27 @@ int main() {
     CHECK(!writeUidMatches("04A651B2C3D480", "04A651"),
           "a truncated selected UID does not match by prefix");
 
+    // Field-update / atomic writes build their payload from currentSpool's
+    // CBOR, so they additionally require currentSpool to describe the bound
+    // tag — otherwise a cooldown-stale currentSpool would donate the wrong
+    // tag's data even when the right tag is selected.
+    CHECK(fieldUpdateWriteAllowed("04A651B2C3D480", "04A651B2C3D480", "04A651B2C3D480"),
+          "field update allowed when selected tag and spool data both match");
+    CHECK(!fieldUpdateWriteAllowed("04A651B2C3D480", "04A651FF99EE11", "04A651B2C3D480"),
+          "field update rejected when a prefix-sharing tag is selected (the #276 swap)");
+    CHECK(!fieldUpdateWriteAllowed("04A651FF99EE11", "04A651FF99EE11", "04A651B2C3D480"),
+          "field update rejected when currentSpool still describes the previous tag");
+    CHECK(!fieldUpdateWriteAllowed("04A651B2C3D480", "", "04A651B2C3D480"),
+          "bound field update rejected when no tag is selected");
+    CHECK(!fieldUpdateWriteAllowed("04A651B2C3D480", "04A651B2C3D480", ""),
+          "bound field update rejected when currentSpool has no UID");
+    CHECK(!fieldUpdateWriteAllowed("04A651B2C3D480", "04A651B2C3D480", nullptr),
+          "bound field update rejected when currentSpool UID is null");
+    CHECK(fieldUpdateWriteAllowed("", "04A651B2C3D480", "04A651FF99EE11"),
+          "unbound field update keeps legacy accept-any behaviour");
+    CHECK(fieldUpdateWriteAllowed(nullptr, "", ""),
+          "null expected UID is treated as unbound for field updates");
+
     if (failures == 0) printf("All write UID guard tests passed\n");
     else printf("%d test(s) FAILED\n", failures);
     return failures == 0 ? 0 : 1;

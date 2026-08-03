@@ -24,3 +24,23 @@ inline bool writeUidMatches(const char* expectedUid, const char* selectedUidHex)
     }
     return strcmp(expectedUid, selectedUidHex) == 0;
 }
+
+// Field-update and atomic writes (REMOVE_WEIGHT, CHANGE_COLOR, WRITE_ATOMIC)
+// build their payload from currentSpool's CBOR before writing it to the
+// selected tag, so a bound write must ALSO confirm that currentSpool describes
+// the bound tag — the cooldown dedup can leave it holding the previous tag's
+// data even when the right tag is selected, and writing that data would
+// corrupt the new tag just as surely as writing to the wrong one.
+//
+//   currentSpoolUid — UID hex currentSpool's tag data was read from.
+inline bool fieldUpdateWriteAllowed(const char* expectedUid,
+                                    const char* selectedUidHex,
+                                    const char* currentSpoolUid) {
+    if (!writeUidMatches(expectedUid, selectedUidHex)) {
+        return false;
+    }
+    if (expectedUid == nullptr || expectedUid[0] == '\0') {
+        return true;   // unbound write — legacy accept-any behaviour
+    }
+    return currentSpoolUid != nullptr && strcmp(currentSpoolUid, expectedUid) == 0;
+}
