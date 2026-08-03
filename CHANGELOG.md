@@ -1,6 +1,9 @@
 # Changelog
 
-## [Unreleased]
+## [1.9.2] - 2026-08-03
+
+Write-path safety and OTA reliability fixes. No configuration changes;
+upgrade over OTA as usual.
 
 ### Fixed
 
