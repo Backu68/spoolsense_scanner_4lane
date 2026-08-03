@@ -1,6 +1,7 @@
 #include "NFCManager.h"
 #include <esp_system.h>
 #include "ConversionUtils.h"
+#include "WriteUidGuard.h"
 #include "TigerTagParser.h"
 #include "OpenSpoolParser.h"
 #include "BambuKeyDeriver.h"
@@ -554,6 +555,18 @@ bool NFCManager::isSkippableDuplicate(const uint8_t* uid, uint8_t uidLength) {
     return strcmp(uidHex, suppressReDetectionUid_) == 0;
 }
 
+void NFCManager::recordSelectedUid(const uint8_t* uid, uint8_t uidLength) {
+    if (uidLength > 8) uidLength = 8;   // selectedUidHex_ holds 8 bytes max
+    for (uint8_t i = 0; i < uidLength; i++) {
+        snprintf(selectedUidHex_ + (i * 2), 3, "%02X", uid[i]);
+    }
+    selectedUidHex_[uidLength * 2] = '\0';
+}
+
+void NFCManager::clearSelectedUid() {
+    selectedUidHex_[0] = '\0';
+}
+
 void NFCManager::handleNewTag(uint8_t* uid, uint8_t uidLength) {
     Serial.println("NFCManager: New spool detected, reading tag...");
     SCAN_PHASE(10);
@@ -663,6 +676,7 @@ void NFCManager::handleTagAbsent() {
     lastOpenTag3DValid_ = false;
     suppressReDetection_ = false;       // allow fresh detection on next tag
     suppressReDetectionUid_[0] = '\0';
+    clearSelectedUid();                 // no tag selected — bound writes fail closed
     xSemaphoreGive(tagMutex);
 }
 
@@ -740,6 +754,10 @@ void NFCManager::scanLoop() {
                 LogBuffer::getInstance().logPrintf("Tag detected: UID=%s\n", uidHex);
             }
             connection_->setCurrentUid(uid, uidLength);
+            // Bind pending writes to the tag we just selected, not to whatever
+            // currentSpool still describes — the cooldown dedup below can skip
+            // handleNewTag() and leave that stale (#276).
+            recordSelectedUid(uid, uidLength);
 
             SCAN_PHASE(4);
             if (!isSkippableDuplicate(uid, uidLength)) {
@@ -1857,12 +1875,17 @@ bool NFCManager::validateWriteUid(const char* expectedUid, const char* writeType
         Serial.printf("NFCManager: %s - could not acquire tagMutex\n", writeType);
         return false;
     }
-    if (expectedUid[0] != '\0' && strcmp(currentSpool.spool_id, expectedUid) != 0) {
-        xSemaphoreGive(tagMutex);
-        Serial.printf("NFCManager: %s rejected - UID mismatch\n", writeType);
+    // Compare against the tag selected on the reader this scan cycle, not
+    // currentSpool.spool_id — the scan-cooldown dedup can leave the latter
+    // describing the previous tag while a different one is selected (#276).
+    const bool ok = writeUidMatches(expectedUid, selectedUidHex_);
+    xSemaphoreGive(tagMutex);
+    if (!ok) {
+        Serial.printf("NFCManager: %s rejected - UID mismatch (expected %s, selected %s)\n",
+                      writeType, expectedUid,
+                      selectedUidHex_[0] ? selectedUidHex_ : "<none>");
         return false;
     }
-    xSemaphoreGive(tagMutex);
     return true;
 }
 
@@ -2575,6 +2598,7 @@ bool NFCManager::scanOnce() {
 
     if (connection_->detectTag(uid, &uidLength)) {
         connection_->setCurrentUid(uid, uidLength);
+        recordSelectedUid(uid, uidLength);
 
         // Check if this is the same spool or if re-detection is suppressed
         bool shouldSkipReRead = isDuplicateSpool(uid, uidLength);
@@ -2635,6 +2659,7 @@ if (blankStateCaptured) {
             // Clear suppression if tag removed
             suppressReDetection_ = false;
             suppressReDetectionUid_[0] = '\0';
+            clearSelectedUid();
 
             xSemaphoreGive(tagMutex);
         }
