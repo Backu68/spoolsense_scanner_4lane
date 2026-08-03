@@ -111,6 +111,11 @@ bool HardwareNFCConnection::begin() {
     Serial.printf("HardwareNFCConnection: Pins — NSS=%d BUSY=%d RST=%d SCK=%d MISO=%d MOSI=%d\n",
                   pinNss_, pinBusy_, pinRst_,
                   pinSck_, pinMiso_, pinMosi_);
+    // Bench diagnostics: confirms whether a PN5180_SPI_HZ build-flag override
+    // reached this image. "Requested" because Arduino-ESP32 derives a hardware
+    // divider from this — e.g. 7 MHz actually runs at ~6.67 MHz on the wire.
+    Serial.printf("HardwareNFCConnection: PN5180 requested SPI clock %lu Hz\n",
+                  (unsigned long)PN5180_SPI_HZ);
     nfc_->begin();
     iso14443a_->begin();
     Serial.println("HardwareNFCConnection: SPI begin done, resetting...");

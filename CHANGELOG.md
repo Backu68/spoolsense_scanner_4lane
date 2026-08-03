@@ -6,6 +6,10 @@
 
 - **Any OTA upload longer than 30 seconds was aborted by the task watchdog** — pausing NFC for the update suspended the scan task with `vTaskSuspend` without unsubscribing it from the task watchdog. That task is the firmware's only watchdog subscriber, and a suspended task can never feed its entry, so the watchdog panicked deterministically 30 seconds into any upload that held the pause. Fast transfers finished inside the window and masked the bug; slower clients hit it every time, and with no rollback the device reset mid-flash and quietly kept running the old firmware. The scan task is now unsubscribed from the watchdog across the pause and re-subscribed on resume. (#280)
 
+### Changed
+
+- **Shared-SPI boards (ESP32-C6, ESP32-C5) now run the PN5180 at 3.5 MHz instead of the 7 MHz datasheet maximum** — with a TFT loading the same SCK/MOSI lines, 7 MHz corrupted a double-digit percentage of UID reads on a C6 bench rig (FF-truncated and bit-flipped UIDs, some sharing enough prefix bytes to slip past the scan-cooldown dedup) while 3.5 MHz read 84/84 clean. The clock is now a build-time knob (`PN5180_SPI_HZ`, guarded to the 7 MHz datasheet ceiling), and the reader boot log prints the requested clock. Dedicated-bus boards keep 7 MHz.
+
 ## [1.9.1] - 2026-08-01
 
 Correctness and responsiveness fixes from a full code review. No configuration

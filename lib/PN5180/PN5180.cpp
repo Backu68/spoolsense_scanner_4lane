@@ -103,8 +103,9 @@ PN5180::PN5180(uint8_t SSpin, uint8_t BUSYpin, uint8_t RSTpin,
    * extended by signal line BUSY. The maximum SPI speed is 7 Mbps and fixed to CPOL
    * = 0 and CPHA = 0.
    */
-  // Settings for PN5180: 7Mbps, MSB first, SPI_MODE0 (CPOL=0, CPHA=0)
-  PN5180_SPI_SETTINGS = SPISettings(7000000, MSBFIRST, SPI_MODE0);
+  // Settings for PN5180: PN5180_SPI_HZ (7Mbps default), MSB first, SPI_MODE0
+  // (CPOL=0, CPHA=0). Clock is overridable via build flag for bench diagnostics.
+  PN5180_SPI_SETTINGS = SPISettings(PN5180_SPI_HZ, MSBFIRST, SPI_MODE0);
 }
 
 void PN5180::begin() {
