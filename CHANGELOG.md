@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+
+- **Any OTA upload longer than 30 seconds was aborted by the task watchdog** — pausing NFC for the update suspended the scan task with `vTaskSuspend` without unsubscribing it from the task watchdog. That task is the firmware's only watchdog subscriber, and a suspended task can never feed its entry, so the watchdog panicked deterministically 30 seconds into any upload that held the pause. Fast transfers finished inside the window and masked the bug; slower clients hit it every time, and with no rollback the device reset mid-flash and quietly kept running the old firmware. The scan task is now unsubscribed from the watchdog across the pause and re-subscribed on resume. (#280)
+
 ## [1.9.1] - 2026-08-01
 
 Correctness and responsiveness fixes from a full code review. No configuration

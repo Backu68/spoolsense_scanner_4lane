@@ -170,6 +170,15 @@ bool NFCManager::getNfcReaderInfo(char* buf, size_t len) const {
 void NFCManager::pauseScanTask() {
 #ifndef NATIVE_TEST
     if (scanTaskHandle) {
+        // The scan task is the only TWDT subscriber in this firmware (the
+        // idle tasks are unsubscribed — sdkconfig on C5/C6, and our
+        // reconfigure sets idle_core_mask=0 elsewhere). Suspending it without
+        // unsubscribing left its watchdog entry aging, so anything that held
+        // the pause longer than the 30s window — an OTA upload from a slow
+        // client, in practice — got a deterministic task_wdt panic mid-flash
+        // (#280). Unsubscribe before suspending; ESP_ERR_NOT_FOUND (already
+        // unsubscribed) is fine.
+        esp_task_wdt_delete(scanTaskHandle);
         vTaskSuspend(scanTaskHandle);
         Serial.println("NFCManager: Scan task paused");
     }
@@ -180,6 +189,9 @@ void NFCManager::resumeScanTask() {
 #ifndef NATIVE_TEST
     if (scanTaskHandle) {
         vTaskResume(scanTaskHandle);
+        // Re-subscribe the resumed task to the TWDT (see pauseScanTask). Its
+        // entry restarts from now; the scan loop feeds it every iteration.
+        esp_task_wdt_add(scanTaskHandle);
         Serial.println("NFCManager: Scan task resumed");
     }
 #endif
