@@ -611,7 +611,7 @@ bool PN5180::transceiveCommand(uint8_t *sendBuffer, size_t sendBufferLen, uint8_
   }
 #ifdef DEBUG
   PN5180DEBUG(F("Sending SPI frame: '"));
-  for (uint8_t i=0; i<sendBufferLen; i++) {
+  for (size_t i=0; i<sendBufferLen; i++) {
     if (i>0) PN5180DEBUG(" ");
     PN5180DEBUG(formatHex(sendBuffer[i]));
   }
@@ -632,7 +632,7 @@ bool PN5180::transceiveCommand(uint8_t *sendBuffer, size_t sendBufferLen, uint8_
   // 1.
   digitalWrite(PN5180_NSS, LOW); delay(2);
   // 2.
-  for (uint8_t i=0; i<sendBufferLen; i++) {
+  for (size_t i=0; i<sendBufferLen; i++) {
     pn5180_spi.transfer(sendBuffer[i]);
   }
   // 3.
@@ -669,7 +669,7 @@ bool PN5180::transceiveCommand(uint8_t *sendBuffer, size_t sendBufferLen, uint8_
   // 1.
   digitalWrite(PN5180_NSS, LOW); delay(2);
   // 2.
-  for (uint8_t i=0; i<recvBufferLen; i++) {
+  for (size_t i=0; i<recvBufferLen; i++) {
     recvBuffer[i] = pn5180_spi.transfer(0xff);
   }
   // 3.
@@ -700,7 +700,7 @@ bool PN5180::transceiveCommand(uint8_t *sendBuffer, size_t sendBufferLen, uint8_
 
 #ifdef DEBUG
   PN5180DEBUG(F("Received: "));
-  for (uint8_t i=0; i<recvBufferLen; i++) {
+  for (size_t i=0; i<recvBufferLen; i++) {
     if (i > 0) PN5180DEBUG(" ");
     PN5180DEBUG(formatHex(recvBuffer[i]));
   }
