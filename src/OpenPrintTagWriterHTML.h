@@ -5,7 +5,7 @@
 // API endpoints available to the page:
 //   GET  /api/status      — current tag state JSON
 //   POST /api/write-tag   — write all fields to tag (JSON body)
-//   POST /api/format-tag  — format a blank tag (optional JSON body: {"uid":"..."})
+//   POST /api/format-tag  — format a blank tag (JSON body: {"uid":"..."} required)
 
 const char OPENPRINTTAG_WRITER_HTML[] PROGMEM = R"rawliteral(
 <!DOCTYPE html>
