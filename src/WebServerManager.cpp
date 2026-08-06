@@ -1574,6 +1574,10 @@ void WebServerManager::handleApiWriteTag() {
     }
 
     const char* uid        = doc["uid"] | "";
+    if (uid[0] == '\0') {
+        sendError(400, "uid required");
+        return;
+    }
     const char* mfr        = doc["manufacturer"] | "";
     float initial_weight_g = doc["initial_weight_g"] | 0.0f;
     float remaining_g      = doc["remaining_g"] | 0.0f;
@@ -1683,7 +1687,8 @@ void WebServerManager::handleApiWriteTag() {
 void WebServerManager::handleApiFormatTag() {
     Serial.println("WebServerManager: POST /api/format-tag received");
 
-    // Optional body: {"uid": "..."} to validate tag before formatting
+    // Body: {"uid": "..."} — required, and the format is bound to that tag so
+    // it cannot erase whichever tag happens to be on the scanner (#283).
     char uid[17] = {0};
     if (_server.hasArg("plain") && _server.arg("plain").length() > 2) {
         StaticJsonDocument<64> doc;
@@ -1691,6 +1696,11 @@ void WebServerManager::handleApiFormatTag() {
             const char* u = doc["uid"] | "";
             strncpy(uid, u, sizeof(uid) - 1);
         }
+    }
+
+    if (uid[0] == '\0') {
+        sendError(400, "uid required");
+        return;
     }
 
     NFCWriteRequest req;
@@ -1721,6 +1731,10 @@ void WebServerManager::handleApiWriteTigerTag() {
     }
 
     const char* uid = doc["uid"] | "";
+    if (uid[0] == '\0') {
+        sendError(400, "uid required");
+        return;
+    }
 
     // Assemble 40-byte TigerTag binary layout (32 bytes data + 8 bytes padding)
     uint8_t payload[40];
@@ -1813,6 +1827,10 @@ void WebServerManager::handleApiWriteOpenTag3D() {
     }
 
     const char* uid = doc["uid"] | "";
+    if (uid[0] == '\0') {
+        sendError(400, "uid required");
+        return;
+    }
 
     opentag3d_t ot3d;
     memset(&ot3d, 0, sizeof(ot3d));
@@ -1910,6 +1928,12 @@ void WebServerManager::handleApiWriteOpenSpool() {
         return;
     }
 
+    const char* uid = doc["uid"] | "";
+    if (uid[0] == '\0') {
+        sendError(400, "uid required");
+        return;
+    }
+
     // Build the tag payload using ArduinoJson to properly escape all values
     StaticJsonDocument<256> tagDoc;
     tagDoc["protocol"] = doc["protocol"] | "openspool";
@@ -1935,7 +1959,7 @@ void WebServerManager::handleApiWriteOpenSpool() {
     // exactly as the TigerTag and OpenTag3D handlers do. Without it
     // validateWriteUid() accepts whatever tag happens to be present, so a tag
     // swapped in after that detection receives this payload.
-    strncpy(req.expected_spool_id, doc["uid"] | "", sizeof(req.expected_spool_id) - 1);
+    strncpy(req.expected_spool_id, uid, sizeof(req.expected_spool_id) - 1);
 
     if (!NFCManager::getInstance().enqueueRawWrite(req, (const uint8_t*)jsonPayload, (size_t)jsonLen)) {
         sendError(503, "Write queue full or busy");

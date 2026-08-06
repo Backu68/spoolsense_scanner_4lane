@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.9.3] - 2026-08-06
+
+### Fixed
+
+- **Tag writes from the web pages are now always bound to the tag being written** — if the page detected a tag but could not read its ID, the write went out unbound and the firmware applied it to whichever tag was on the scanner at that moment. The writer pages now stop with an explanation, and the scanner rejects any write request that arrives without a tag ID. Writing still needs no extra steps: the page detects the tag when you press Write, exactly as before. (#283)
+
 ## [1.9.2] - 2026-08-03
 
 Write-path safety and OTA reliability fixes. No configuration changes;

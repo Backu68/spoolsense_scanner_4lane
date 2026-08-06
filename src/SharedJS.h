@@ -633,6 +633,15 @@ async function sharedWriteFlow(config) {
   try {
     var presentStatus = await waitForTag(8000);
 
+    // The tag is detected here, at submit time — nothing requires the user to
+    // press Read first. But a tag can report present before its UID is
+    // readable, and writing without one lands on whatever tag is on the
+    // scanner. Stop with an explanation rather than sending an unbound write.
+    if (!presentStatus.uid) {
+      setStepState('step-wait', 'error');
+      throw new Error('Tag detected but its ID could not be read. Reposition it on the scanner and try again.');
+    }
+
     setStepState('step-detect', 'active');
     setBanner('statusBanner', 'Tag detected.');
     setResult('resultBox', 'UID: ' + (presentStatus.uid || 'Unknown'), '');
