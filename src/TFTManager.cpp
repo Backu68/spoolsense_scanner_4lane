@@ -264,6 +264,12 @@ void TFTManager::taskFunc(void* param) {
 
 void TFTManager::taskLoop() {
     while (true) {
+        if (_stopRequested) {
+            // Park at a clean point — the bus guard and transient strip are
+            // released every iteration — so freeForOTA can delete this task
+            // without stranding the shared-SPI mutex or a sprite buffer.
+            vTaskSuspend(nullptr);
+        }
         processQueue();
         MemoryDiagnostics::reportSelf(MemoryDiagnostics::Task::TFT);
         vTaskDelay(pdMS_TO_TICKS(20));  // 50 Hz update rate; allows other tasks to run between renders
@@ -293,61 +299,65 @@ void TFTManager::processQueue() {
             switch (msg.state) {
                 case TFTState::Boot:
                     if (_driver == TFTDriver::ILI9488)
-                        renderTextLandscape("SpoolSense", msg.statusText, COLOR_ACCENT);
+                        rendered = renderTextLandscape("SpoolSense", msg.statusText, COLOR_ACCENT);
                     else
                         rendered = renderBoot(msg.statusText);
                     break;
                 case TFTState::WifiConnecting:
                     if (_driver == TFTDriver::ILI9488)
-                        renderTextLandscape(msg.statusText, msg.statusText2[0] ? msg.statusText2 : nullptr, COLOR_TEXT);
+                        rendered = renderTextLandscape(msg.statusText, msg.statusText2[0] ? msg.statusText2 : nullptr, COLOR_TEXT);
                     else
                         rendered = renderStatus(msg.statusText, msg.statusText2[0] ? msg.statusText2 : nullptr);
                     break;
                 case TFTState::Ready:
                     if (_driver == TFTDriver::ILI9488) {
-                        renderReadyLandscape();
+                        rendered = renderReadyLandscape();
                     } else {
                         rendered = renderReady();
                     }
                     break;
                 case TFTState::SpoolScanned:
-                    // Breathing animation for low-weight spools (< 100g): visual cue for respool
-                    _isBreathing = (msg.spool.remainingWeight > 0 &&
-                                    msg.spool.remainingWeight <= (float)ConfigurationManager::getInstance().getLowSpoolThreshold());
-                    if (_isBreathing) {
-                        _breathColor = hexToRgb(msg.spool.colorHex);
-                        _breathBrightness = 255;
-                        _breathDirection = -1;  // start dimming
-                    }
                     if (_driver == TFTDriver::ILI9488) {
-                        renderSpoolScannedLandscape(msg.spool);
+                        rendered = renderSpoolScannedLandscape(msg.spool);
                     } else {
                         rendered = renderSpoolScanned(msg.spool);
+                    }
+                    // Breathing animation for low-weight spools (< 100g): visual
+                    // cue for respool. Armed only for frames actually displayed —
+                    // a dropped frame must not pulse whatever screen it left up.
+                    if (rendered) {
+                        _isBreathing = (msg.spool.remainingWeight > 0 &&
+                                        msg.spool.remainingWeight <= (float)ConfigurationManager::getInstance().getLowSpoolThreshold());
+                        if (_isBreathing) {
+                            _breathColor = hexToRgb(msg.spool.colorHex);
+                            _breathBrightness = 255;
+                            _breathDirection = -1;  // start dimming
+                        }
                     }
                     break;
                 case TFTState::Writing:
                     if (_driver == TFTDriver::ILI9488)
-                        renderTextLandscape("Writing...", msg.statusText, COLOR_TEXT);
+                        rendered = renderTextLandscape("Writing...", msg.statusText, COLOR_TEXT);
                     else
                         rendered = renderStatus("Writing...", msg.statusText);
                     break;
                 case TFTState::WriteResult:
                     if (_driver == TFTDriver::ILI9488)
-                        renderTextLandscape(msg.writeSuccess ? "Success" : "Write Failed",
-                                            msg.statusText,
-                                            msg.writeSuccess ? COLOR_BAR_FG : COLOR_BAR_LOW);
+                        rendered = renderTextLandscape(msg.writeSuccess ? "Success" : "Write Failed",
+                                                       msg.statusText,
+                                                       msg.writeSuccess ? COLOR_BAR_FG : COLOR_BAR_LOW);
                     else
                         rendered = renderWriteResult(msg.writeSuccess, msg.statusText);
                     break;
                 case TFTState::KeypadEntry:
                     if (_driver == TFTDriver::ILI9488)
-                        renderTextLandscape("Tool", msg.statusText, COLOR_ACCENT);
+                        rendered = renderTextLandscape("Tool", msg.statusText, COLOR_ACCENT);
                     else
                         rendered = renderKeypadEntry(msg.statusText);
                     break;
                 case TFTState::Error:
                     if (_driver == TFTDriver::ILI9488)
-                        renderTextLandscape("Error", msg.statusText, COLOR_BAR_LOW);
+                        rendered = renderTextLandscape("Error", msg.statusText, COLOR_BAR_LOW);
                     else
                         rendered = renderStatus("Error", msg.statusText);
                     break;
@@ -720,7 +730,8 @@ void TFTManager::drawLandscapeReady(LGFX_Sprite& canvas, int yOffset) {
 
 // Shared landscape backend: PSRAM -> one full 480x320 16-bit sprite; no-PSRAM ->
 // a reused 32-row RGB565 strip drawn band-by-band. spool==nullptr renders idle.
-void TFTManager::renderLandscapeFrame(const DisplaySpoolData* spool) {
+// Returns false if the frame was dropped because no sprite could be allocated.
+bool TFTManager::renderLandscapeFrame(const DisplaySpoolData* spool) {
     const int W = 480, H = 320;
 
     if (psramFound()) {
@@ -734,7 +745,7 @@ void TFTManager::renderLandscapeFrame(const DisplaySpoolData* spool) {
             else       drawLandscapeReady(full, 0);
             full.pushSprite(0, 0);
             full.deleteSprite();
-            return;
+            return true;
         }
         Serial.println("TFT: PSRAM landscape sprite failed, using strips");
     }
@@ -743,7 +754,7 @@ void TFTManager::renderLandscapeFrame(const DisplaySpoolData* spool) {
     _strip.setColorDepth(16);
     if (!_strip.createSprite(W, STRIP_H)) {
         Serial.println("TFT: landscape strip alloc failed");
-        return;
+        return false;
     }
     for (int bandY = 0; bandY < H; bandY += STRIP_H) {
         _strip.fillScreen(COLOR_BG);
@@ -753,14 +764,15 @@ void TFTManager::renderLandscapeFrame(const DisplaySpoolData* spool) {
         _strip.pushSprite(0, bandY);
     }
     _strip.deleteSprite();
+    return true;
 }
 
-void TFTManager::renderSpoolScannedLandscape(const DisplaySpoolData& spool) {
-    renderLandscapeFrame(&spool);
+bool TFTManager::renderSpoolScannedLandscape(const DisplaySpoolData& spool) {
+    return renderLandscapeFrame(&spool);
 }
 
-void TFTManager::renderReadyLandscape() {
-    renderLandscapeFrame(nullptr);
+bool TFTManager::renderReadyLandscape() {
+    return renderLandscapeFrame(nullptr);
 }
 
 // Centered status text body (scan-progress / write-result screens), FreeFonts.
@@ -784,7 +796,7 @@ void TFTManager::drawLandscapeText(LGFX_Sprite& canvas, int yOffset,
     }
 }
 
-void TFTManager::renderTextLandscape(const char* l1, const char* l2, uint32_t l1Color) {
+bool TFTManager::renderTextLandscape(const char* l1, const char* l2, uint32_t l1Color) {
     const int W = 480, H = 320;
     if (psramFound()) {
         LGFX_Sprite full(&_tft);
@@ -796,13 +808,13 @@ void TFTManager::renderTextLandscape(const char* l1, const char* l2, uint32_t l1
             drawLandscapeText(full, 0, l1, l2, l1Color);
             full.pushSprite(0, 0);
             full.deleteSprite();
-            return;
+            return true;
         }
         Serial.println("TFT: PSRAM text sprite failed, using strips");
     }
     const int STRIP_H = 32;
     _strip.setColorDepth(16);
-    if (!_strip.createSprite(W, STRIP_H)) return;
+    if (!_strip.createSprite(W, STRIP_H)) return false;
     for (int bandY = 0; bandY < H; bandY += STRIP_H) {
         _strip.fillScreen(COLOR_BG);
         drawStatusBar(_strip, bandY);
@@ -810,6 +822,7 @@ void TFTManager::renderTextLandscape(const char* l1, const char* l2, uint32_t l1
         _strip.pushSprite(0, bandY);
     }
     _strip.deleteSprite();
+    return true;
 }
 
 // Repaint only the top status band (cheap, ~24KB strip) so idle status stays
@@ -1072,15 +1085,28 @@ void TFTManager::showSpool(const DisplaySpoolData& spool) {
 void TFTManager::freeForOTA() {
     // Stop TFT task before OTA: queue messages from main task would race with direct
     // frame buffer writes. OTA may reboot (success) or hang (failure); sprite not restored.
+    // Cooperative stop: ask the task to park at its clean point, then delete
+    // it there. Deleting it mid-frame would strand whatever it held — the
+    // shared-SPI mutex (dead OTA screen + dead NFC on shared-bus boards) and
+    // any transient sprite — because vTaskDelete does not unwind the stack.
+    // NFC is already paused, so the task cannot block on the bus for long;
+    // the bound comfortably exceeds the guard's own acquire timeout.
     if (_taskHandle != nullptr) {
+        _stopRequested = true;
+        for (int i = 0; i < 500 && eTaskGetState(_taskHandle) != eSuspended; ++i) {
+            vTaskDelay(pdMS_TO_TICKS(10));
+        }
+        if (eTaskGetState(_taskHandle) != eSuspended) {
+            Serial.println("TFTManager: render task did not park; deleting anyway");
+        } else {
+            Serial.println("TFTManager: Task stopped for OTA");
+        }
         vTaskDelete(_taskHandle);
         _taskHandle = nullptr;
-        Serial.println("TFTManager: Task stopped for OTA");
     }
 
-    // vTaskDelete above does not unwind the render task's stack, so a kill
-    // landing mid-frame leaves the transient strip allocated — reclaim it
-    // here (safe no-op when it holds no buffer).
+    // Reclaim the transient strip in case the task had to be deleted without
+    // parking (safe no-op when it holds no buffer).
     _strip.deleteSprite();
 
     // Release the persistent framebuffer for the OTA TLS/HTTPS buffers (#59).

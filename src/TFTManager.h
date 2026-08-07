@@ -127,10 +127,10 @@ private:
     bool renderBoot(const char* version);
     bool renderReady();
     bool renderSpoolScanned(const DisplaySpoolData& spool);
-    void renderSpoolScannedLandscape(const DisplaySpoolData& spool);  // ILI9488 480x320
-    void renderReadyLandscape();                                      // ILI9488 idle screen
-    void renderTextLandscape(const char* l1, const char* l2, uint32_t l1Color);  // ILI9488 status text
-    void renderLandscapeFrame(const DisplaySpoolData* spool);         // shared backend (nullptr=idle)
+    bool renderSpoolScannedLandscape(const DisplaySpoolData& spool);  // ILI9488 480x320
+    bool renderReadyLandscape();                                      // ILI9488 idle screen
+    bool renderTextLandscape(const char* l1, const char* l2, uint32_t l1Color);  // ILI9488 status text
+    bool renderLandscapeFrame(const DisplaySpoolData* spool);         // shared backend (nullptr=idle)
     void refreshStatusBar();                                          // periodic header-only update
     bool renderStatus(const char* line1, const char* line2 = nullptr);
     bool renderWriteResult(bool success, const char* tagFormat);
@@ -189,6 +189,10 @@ private:
 
     QueueHandle_t _messageQueue;
     TaskHandle_t _taskHandle;
+    // freeForOTA sets this to park the render task at a clean point (no bus
+    // guard held, no transient sprite allocated) before deleting it —
+    // vTaskDelete does not unwind the victim's stack.
+    volatile bool _stopRequested = false;
     bool _began = false;  // panel + bus initialized; render task must not start otherwise
     bool _fullFrame = false;  // persistent 240x240 _sprite exists; false = strip rendering
     bool _wide = false;   // panel larger than 240x240 (ILI9488) — landscape-capable
