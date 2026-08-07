@@ -135,10 +135,26 @@ private:
     void renderStatus(const char* line1, const char* line2 = nullptr);
     void renderWriteResult(bool success, const char* tagFormat);
     void renderKeypadEntry(const char* toolNumber);
+    void renderTrayDashboard(const TrayDashboardState& state);
 
-    // --- Drawing helpers ---
-    void drawWeightBar(int x, int y, int w, int h, float remaining, float total);
-    void drawTagIcon(uint8_t tagType, int x, int y);
+    // Shared 240x240 backend: fills the background, runs drawBody over the
+    // frame, and pushes it at the panel-aware origin. Bodies draw the full
+    // virtual 240x240 frame shifted by -yOffset and must not read canvas
+    // dimensions for layout (the canvas may be a strip band).
+    template <typename DrawFn> void render240Frame(DrawFn&& drawBody);
+
+    // 240x240 frame bodies — same (canvas, yOffset) contract as drawLandscape*.
+    void drawBoot240(LGFX_Sprite& canvas, int yOffset, const char* version);
+    void drawReady240(LGFX_Sprite& canvas, int yOffset);
+    void drawSpool240(LGFX_Sprite& canvas, int yOffset, const DisplaySpoolData& spool);
+    void drawStatus240(LGFX_Sprite& canvas, int yOffset, const char* line1, const char* line2);
+    void drawWriteResult240(LGFX_Sprite& canvas, int yOffset, bool success, const char* tagFormat);
+    void drawKeypad240(LGFX_Sprite& canvas, int yOffset, const char* toolNumber);
+
+    // --- Drawing helpers (y arrives already band-translated by the caller) ---
+    void drawWeightBar(LGFX_Sprite& canvas, int x, int y, int w, int h,
+                       float remaining, float total);
+    void drawTagIcon(LGFX_Sprite& canvas, uint8_t tagType, int x, int y);
     void blitCanvas();  // push _sprite at the panel-aware (centered on wide panels) origin
     // Draw the full 480x320 landscape layout into any canvas, shifting all Y by
     // -yOffset (so one function fills a full sprite or a strip band).
@@ -153,7 +169,7 @@ private:
     void drawSpoolImage(LGFX_Sprite& canvas, int cx, int cy, uint32_t tint, int yOffset,
                         int size = 0);
     void drawWifiBars(LGFX_Sprite& canvas, int x, int y, int rssi, bool connected);
-    void drawWifiIcon240();  // signal bars in the 240x240 header's top-right
+    void drawWifiIcon240(LGFX_Sprite& canvas, int yOffset);  // signal bars in the 240x240 header's top-right
     uint32_t hexToRgb(const char* hex);
     uint32_t dimColor(uint32_t color, uint8_t brightness); // for low-spool breathing
 

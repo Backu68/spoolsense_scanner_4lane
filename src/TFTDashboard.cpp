@@ -11,24 +11,24 @@ uint32_t TFTDashboard::contrastTextColor(uint8_t r, uint8_t g, uint8_t b) {
     return luminance > 128.0f ? COLOR_BLACK : COLOR_WHITE;
 }
 
-void TFTDashboard::renderEmptyCell(LGFX_Sprite* sprite, int x, int y, int w, int h, bool small) {
-    sprite->fillRect(x, y, w, h, COLOR_EMPTY_BG);
-    sprite->setTextColor(COLOR_EMPTY_TEXT);
-    sprite->setTextDatum(MC_DATUM);
-    sprite->setTextSize(small ? 1 : 2);
-    sprite->drawString("-", x + w / 2, y + h / 2);
+void TFTDashboard::drawEmptyCell(LGFX_Sprite& canvas, int x, int y, int w, int h, bool small) {
+    canvas.fillRect(x, y, w, h, COLOR_EMPTY_BG);
+    canvas.setTextColor(COLOR_EMPTY_TEXT);
+    canvas.setTextDatum(MC_DATUM);
+    canvas.setTextSize(small ? 1 : 2);
+    canvas.drawString("-", x + w / 2, y + h / 2);
 }
 
-void TFTDashboard::renderCell(LGFX_Sprite* sprite, int x, int y, int w, int h,
-                               const TrayData& tray, bool small) {
+void TFTDashboard::drawCell(LGFX_Sprite& canvas, int x, int y, int w, int h,
+                            const TrayData& tray, bool small) {
     uint32_t bgColor = (static_cast<uint32_t>(tray.color[0]) << 16) |
                        (static_cast<uint32_t>(tray.color[1]) << 8) |
                         static_cast<uint32_t>(tray.color[2]);
-    sprite->fillRect(x, y, w, h, bgColor);
+    canvas.fillRect(x, y, w, h, bgColor);
 
     uint32_t textColor = contrastTextColor(tray.color[0], tray.color[1], tray.color[2]);
-    sprite->setTextColor(textColor);
-    sprite->setTextDatum(MC_DATUM);
+    canvas.setTextColor(textColor);
+    canvas.setTextDatum(MC_DATUM);
 
     char label[6];
     snprintf(label, sizeof(label), "T%d", tray.tray_index + 1);
@@ -42,32 +42,29 @@ void TFTDashboard::renderCell(LGFX_Sprite* sprite, int x, int y, int w, int h,
 
     if (small) {
         // 4x4 grid: compact layout
-        sprite->setTextSize(1);
+        canvas.setTextSize(1);
         int cy = y + h / 2;
-        sprite->drawString(label, x + w / 2, cy - 14);
-        sprite->drawString(tray.material, x + w / 2, cy);
-        sprite->drawString(weight, x + w / 2, cy + 14);
+        canvas.drawString(label, x + w / 2, cy - 14);
+        canvas.drawString(tray.material, x + w / 2, cy);
+        canvas.drawString(weight, x + w / 2, cy + 14);
     } else {
         // 2x2 grid: spacious layout
         int cy = y + h / 2;
-        sprite->setTextSize(1);
-        sprite->drawString(label, x + w / 2, cy - 28);
-        sprite->setTextSize(2);
-        sprite->drawString(tray.material, x + w / 2, cy);
-        sprite->setTextSize(1);
-        sprite->drawString(weight, x + w / 2, cy + 28);
+        canvas.setTextSize(1);
+        canvas.drawString(label, x + w / 2, cy - 28);
+        canvas.setTextSize(2);
+        canvas.drawString(tray.material, x + w / 2, cy);
+        canvas.setTextSize(1);
+        canvas.drawString(weight, x + w / 2, cy + 28);
     }
 }
 
-void TFTDashboard::render(LGFX_Sprite* sprite, const TrayDashboardState& state, int offX, int offY) {
-    sprite->fillScreen(0x000000);
-
+void TFTDashboard::draw(LGFX_Sprite& canvas, int yOffset, const TrayDashboardState& state) {
     if (state.tray_count == 0) {
-        sprite->setTextColor(COLOR_EMPTY_TEXT);
-        sprite->setTextDatum(MC_DATUM);
-        sprite->setTextSize(2);
-        sprite->drawString("No Trays", 120, 120);
-        sprite->pushSprite(offX, offY);
+        canvas.setTextColor(COLOR_EMPTY_TEXT);
+        canvas.setTextDatum(MC_DATUM);
+        canvas.setTextSize(2);
+        canvas.drawString("No Trays", 120, 120 - yOffset);
         return;
     }
 
@@ -89,14 +86,12 @@ void TFTDashboard::render(LGFX_Sprite* sprite, const TrayDashboardState& state, 
         uint8_t col = i % cols;
         uint8_t row = i / cols;
         int x = CELL_GAP + col * (cellW + CELL_GAP);
-        int y = CELL_GAP + row * (cellH + CELL_GAP);
+        int y = CELL_GAP + row * (cellH + CELL_GAP) - yOffset;
 
         if (i < state.tray_count && state.trays[i].populated) {
-            renderCell(sprite, x, y, cellW, cellH, state.trays[i], small);
+            drawCell(canvas, x, y, cellW, cellH, state.trays[i], small);
         } else {
-            renderEmptyCell(sprite, x, y, cellW, cellH, small);
+            drawEmptyCell(canvas, x, y, cellW, cellH, small);
         }
     }
-
-    sprite->pushSprite(offX, offY);
 }

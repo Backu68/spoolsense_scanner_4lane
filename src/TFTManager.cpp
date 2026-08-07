@@ -351,7 +351,7 @@ void TFTManager::processQueue() {
                         renderStatus("Error", msg.statusText);
                     break;
                 case TFTState::TrayDashboard:
-                    _dashboard.render(&_sprite, msg.dashboardState, _blitOx, _blitOy);
+                    renderTrayDashboard(msg.dashboardState);
                     break;
             }
             // Commit state only after a successful (guarded) render, so the idle
@@ -441,99 +441,100 @@ void TFTManager::blitCanvas() {
     _sprite.pushSprite(_blitOx, _blitOy);
 }
 
-void TFTManager::renderBoot(const char* version) {
+// Shared 240x240 backend: full persistent sprite. Bodies take (canvas, yOffset)
+// so this can flip to strip bands without touching them.
+template <typename DrawFn>
+void TFTManager::render240Frame(DrawFn&& drawBody) {
     _sprite.fillScreen(COLOR_BG);
-
-    // Centered logo text
-    _sprite.setTextColor(COLOR_ACCENT);
-    _sprite.setTextSize(3);
-    _sprite.setTextDatum(MC_DATUM);
-    _sprite.drawString("SpoolSense", _sprite.width() / 2, _sprite.height() / 2 - 20);
-
-    _sprite.setTextColor(COLOR_SUBTEXT);
-    _sprite.setTextSize(1);
-    _sprite.drawString(version, _sprite.width() / 2, _sprite.height() / 2 + 20);
-
+    drawBody(_sprite, 0);
     blitCanvas();
+}
+
+void TFTManager::renderBoot(const char* version) {
+    render240Frame([&](LGFX_Sprite& c, int y) { drawBoot240(c, y, version); });
+}
+
+void TFTManager::drawBoot240(LGFX_Sprite& canvas, int yOffset, const char* version) {
+    const int W = 240, H = 240;
+    auto Y = [&](int y){ return y - yOffset; };
+
+    canvas.setTextColor(COLOR_ACCENT);
+    canvas.setTextSize(3);
+    canvas.setTextDatum(MC_DATUM);
+    canvas.drawString("SpoolSense", W / 2, Y(H / 2 - 20));
+
+    canvas.setTextColor(COLOR_SUBTEXT);
+    canvas.setTextSize(1);
+    canvas.drawString(version, W / 2, Y(H / 2 + 20));
 }
 
 void TFTManager::renderReady() {
-    _sprite.fillScreen(COLOR_BG);
+    render240Frame([&](LGFX_Sprite& c, int y) { drawReady240(c, y); });
+}
 
-    // Header bar
-    _sprite.fillRect(0, 0, _sprite.width(), 28, COLOR_HEADER_BG);
-    _sprite.setTextColor(COLOR_ACCENT);
-    _sprite.setTextSize(1);
-    _sprite.setTextDatum(MC_DATUM);
-    _sprite.drawString("SpoolSense", _sprite.width() / 2, 14);
-    drawWifiIcon240();
+void TFTManager::drawReady240(LGFX_Sprite& canvas, int yOffset) {
+    const int W = 240, H = 240;
+    auto Y = [&](int y){ return y - yOffset; };
+
+    canvas.fillRect(0, Y(0), W, 28, COLOR_HEADER_BG);
+    canvas.setTextColor(COLOR_ACCENT);
+    canvas.setTextSize(1);
+    canvas.setTextDatum(MC_DATUM);
+    canvas.drawString("SpoolSense", W / 2, Y(14));
+    drawWifiIcon240(canvas, yOffset);
 
     // Idle spool graphic: grey fill indicates no spool selected (waiting for tag)
-    int cx = _sprite.width() / 2;
-    int cy = _sprite.height() / 2 + 10;
-    drawSpoolImage(_sprite, cx, cy, 0x888888, 0, 150);  // neutral grey idle spool
+    int cx = W / 2;
+    int cy = H / 2 + 10;
+    drawSpoolImage(canvas, cx, cy, 0x888888, yOffset, 150);
 
-    // Prompt
-    _sprite.setTextColor(COLOR_SUBTEXT);
-    _sprite.setTextSize(1);
-    _sprite.setTextDatum(MC_DATUM);
-    _sprite.drawString("Tap a spool to scan", cx, _sprite.height() - 16);
-
-    blitCanvas();
+    canvas.setTextColor(COLOR_SUBTEXT);
+    canvas.setTextSize(1);
+    canvas.setTextDatum(MC_DATUM);
+    canvas.drawString("Tap a spool to scan", cx, Y(H - 16));
 }
 
 void TFTManager::renderSpoolScanned(const DisplaySpoolData& spool) {
-    _sprite.fillScreen(COLOR_BG);
+    render240Frame([&](LGFX_Sprite& c, int y) { drawSpool240(c, y, spool); });
+}
 
-    int W = _sprite.width();   // 240
-    int H = _sprite.height();  // 240
+void TFTManager::drawSpool240(LGFX_Sprite& canvas, int yOffset, const DisplaySpoolData& spool) {
+    const int W = 240;
+    auto Y = [&](int y){ return y - yOffset; };
 
-    // Header bar
-    _sprite.fillRect(0, 0, W, 28, COLOR_HEADER_BG);
+    canvas.fillRect(0, Y(0), W, 28, COLOR_HEADER_BG);
+    drawTagIcon(canvas, spool.tagType, 4, Y(2));
+    canvas.setTextColor(COLOR_ACCENT);
+    canvas.setTextSize(1);
+    canvas.setTextDatum(MC_DATUM);
+    canvas.drawString("SpoolSense", W / 2, Y(14));
+    drawWifiIcon240(canvas, yOffset);
 
-    // Tag type icon top-left in header
-    drawTagIcon(spool.tagType, 4, 2);
-
-    // "SpoolSense" in header
-    _sprite.setTextColor(COLOR_ACCENT);
-    _sprite.setTextSize(1);
-    _sprite.setTextDatum(MC_DATUM);
-    _sprite.drawString("SpoolSense", _sprite.width() / 2, 14);
-    drawWifiIcon240();
-
-    // ---- Spool graphic ----
     uint32_t fillColor = hexToRgb(spool.colorHex);
     int cx = W / 2;
-    int cy = 110;
-    drawSpoolImage(_sprite, cx, cy, fillColor, 0, 150);
+    drawSpoolImage(canvas, cx, 110, fillColor, yOffset, 150);
 
-    // ---- Text area ----
     int textY = 190;
-    _sprite.setTextDatum(MC_DATUM);
+    canvas.setTextDatum(MC_DATUM);
 
-    // Brand + material
     char brandMat[48];
     snprintf(brandMat, sizeof(brandMat), "%s  %s", spool.brand, spool.material);
-    _sprite.setTextColor(COLOR_TEXT);
-    _sprite.setTextSize(1);
-    _sprite.drawString(brandMat, cx, textY);
+    canvas.setTextColor(COLOR_TEXT);
+    canvas.setTextSize(1);
+    canvas.drawString(brandMat, cx, Y(textY));
 
-    // Weight bar
     if (spool.totalWeight > 0) {
-        drawWeightBar(20, textY + 14, W - 40, 8,
+        drawWeightBar(canvas, 20, Y(textY + 14), W - 40, 8,
                       spool.remainingWeight, spool.totalWeight);
 
-        // Weight text
         char weightStr[32];
         snprintf(weightStr, sizeof(weightStr), "%.0fg / %.0fg",
                  spool.remainingWeight, spool.totalWeight);
-        _sprite.setTextColor(COLOR_SUBTEXT);
-        _sprite.setTextSize(1);
-        _sprite.setTextDatum(MC_DATUM);
-        _sprite.drawString(weightStr, cx, textY + 30);
+        canvas.setTextColor(COLOR_SUBTEXT);
+        canvas.setTextSize(1);
+        canvas.setTextDatum(MC_DATUM);
+        canvas.drawString(weightStr, cx, Y(textY + 30));
     }
-
-    blitCanvas();
 }
 
 // Tinted 3D spool image. For each luminance pixel: brightness gates how much of
@@ -583,13 +584,12 @@ void TFTManager::drawWifiBars(LGFX_Sprite& canvas, int x, int y, int rssi, bool 
     }
 }
 
-// Shared top bar: "SpoolSense" + WiFi/HA/Printer status. Status is queried live
-// (bool reads / WiFi calls are safe from the TFT task).
 // Same signal-bars indicator as the landscape status bar, sized for the
-// 240x240 header (top-right corner).
-void TFTManager::drawWifiIcon240() {
+// 240x240 header (top-right corner). WiFi status is queried live (safe from
+// the TFT task).
+void TFTManager::drawWifiIcon240(LGFX_Sprite& canvas, int yOffset) {
     bool up = (WiFi.status() == WL_CONNECTED);
-    drawWifiBars(_sprite, _sprite.width() - 26, 22, up ? (int)WiFi.RSSI() : -127, up);
+    drawWifiBars(canvas, 240 - 26, 22 - yOffset, up ? (int)WiFi.RSSI() : -127, up);
 }
 
 void TFTManager::drawStatusBar(LGFX_Sprite& canvas, int yOffset) {
@@ -809,93 +809,96 @@ void TFTManager::refreshStatusBar() {
 }
 
 void TFTManager::renderStatus(const char* line1, const char* line2) {
-    _sprite.fillScreen(COLOR_BG);
+    render240Frame([&](LGFX_Sprite& c, int y) { drawStatus240(c, y, line1, line2); });
+}
 
-    _sprite.fillRect(0, 0, _sprite.width(), 28, COLOR_HEADER_BG);
-    _sprite.setTextColor(COLOR_ACCENT);
-    _sprite.setTextSize(1);
-    _sprite.setTextDatum(MC_DATUM);
-    _sprite.drawString("SpoolSense", _sprite.width() / 2, 14);
-    drawWifiIcon240();
+void TFTManager::drawStatus240(LGFX_Sprite& canvas, int yOffset,
+                               const char* line1, const char* line2) {
+    const int W = 240, H = 240;
+    auto Y = [&](int y){ return y - yOffset; };
 
-    int cy = _sprite.height() / 2;
-    _sprite.setTextColor(COLOR_TEXT);
-    _sprite.setTextSize(2);
-    _sprite.setTextDatum(MC_DATUM);
-    _sprite.drawString(line1, _sprite.width() / 2, line2 ? cy - 12 : cy);
+    canvas.fillRect(0, Y(0), W, 28, COLOR_HEADER_BG);
+    canvas.setTextColor(COLOR_ACCENT);
+    canvas.setTextSize(1);
+    canvas.setTextDatum(MC_DATUM);
+    canvas.drawString("SpoolSense", W / 2, Y(14));
+    drawWifiIcon240(canvas, yOffset);
+
+    int cy = H / 2;
+    canvas.setTextColor(COLOR_TEXT);
+    canvas.setTextSize(2);
+    canvas.setTextDatum(MC_DATUM);
+    canvas.drawString(line1, W / 2, Y(line2 ? cy - 12 : cy));
 
     if (line2) {
-        _sprite.setTextColor(COLOR_SUBTEXT);
-        _sprite.setTextSize(1);
-        _sprite.drawString(line2, _sprite.width() / 2, cy + 12);
+        canvas.setTextColor(COLOR_SUBTEXT);
+        canvas.setTextSize(1);
+        canvas.drawString(line2, W / 2, Y(cy + 12));
     }
-
-    blitCanvas();
 }
 
 void TFTManager::renderWriteResult(bool success, const char* tagFormat) {
-    _sprite.fillScreen(COLOR_BG);
-    _sprite.fillRect(0, 0, _sprite.width(), 28, COLOR_HEADER_BG);
-    _sprite.setTextColor(COLOR_ACCENT);
-    _sprite.setTextSize(1);
-    _sprite.setTextDatum(MC_DATUM);
-    _sprite.drawString("SpoolSense", _sprite.width() / 2, 14);
-    drawWifiIcon240();
+    render240Frame([&](LGFX_Sprite& c, int y) { drawWriteResult240(c, y, success, tagFormat); });
+}
 
-    int cx = _sprite.width() / 2;
-    int cy = _sprite.height() / 2;
+void TFTManager::drawWriteResult240(LGFX_Sprite& canvas, int yOffset,
+                                    bool success, const char* tagFormat) {
+    const int W = 240, H = 240;
+    auto Y = [&](int y){ return y - yOffset; };
 
-    if (success) {
-        // Green checkmark circle
-        _sprite.fillCircle(cx, cy - 20, 22, 0x00CC66);
-        _sprite.setTextColor(COLOR_BG);
-        _sprite.setTextSize(3);
-        _sprite.setTextDatum(MC_DATUM);
-        _sprite.drawString("OK", cx, cy - 20);
-        _sprite.setTextColor(COLOR_TEXT);
-        _sprite.setTextSize(1);
-        _sprite.drawString("Write OK", cx, cy + 12);
-        _sprite.setTextColor(COLOR_SUBTEXT);
-        _sprite.drawString(tagFormat, cx, cy + 26);
-    } else {
-        _sprite.fillCircle(cx, cy - 20, 22, 0xFF4444);
-        _sprite.setTextColor(COLOR_BG);
-        _sprite.setTextSize(3);
-        _sprite.setTextDatum(MC_DATUM);
-        _sprite.drawString("X", cx, cy - 20);
-        _sprite.setTextColor(COLOR_TEXT);
-        _sprite.setTextSize(1);
-        _sprite.drawString("Write failed", cx, cy + 12);
-        _sprite.setTextColor(COLOR_SUBTEXT);
-        _sprite.drawString(tagFormat, cx, cy + 26);
-    }
+    canvas.fillRect(0, Y(0), W, 28, COLOR_HEADER_BG);
+    canvas.setTextColor(COLOR_ACCENT);
+    canvas.setTextSize(1);
+    canvas.setTextDatum(MC_DATUM);
+    canvas.drawString("SpoolSense", W / 2, Y(14));
+    drawWifiIcon240(canvas, yOffset);
 
-    blitCanvas();
+    int cx = W / 2;
+    int cy = H / 2;
+
+    canvas.fillCircle(cx, Y(cy - 20), 22, success ? 0x00CC66 : 0xFF4444);
+    canvas.setTextColor(COLOR_BG);
+    canvas.setTextSize(3);
+    canvas.setTextDatum(MC_DATUM);
+    canvas.drawString(success ? "OK" : "X", cx, Y(cy - 20));
+    canvas.setTextColor(COLOR_TEXT);
+    canvas.setTextSize(1);
+    canvas.drawString(success ? "Write OK" : "Write failed", cx, Y(cy + 12));
+    canvas.setTextColor(COLOR_SUBTEXT);
+    canvas.drawString(tagFormat, cx, Y(cy + 26));
 }
 
 void TFTManager::renderKeypadEntry(const char* toolNumber) {
-    _sprite.fillScreen(COLOR_BG);
-    _sprite.fillRect(0, 0, _sprite.width(), 28, COLOR_HEADER_BG);
-    _sprite.setTextColor(COLOR_ACCENT);
-    _sprite.setTextSize(1);
-    _sprite.setTextDatum(MC_DATUM);
-    _sprite.drawString("SpoolSense", _sprite.width() / 2, 14);
-    drawWifiIcon240();
+    render240Frame([&](LGFX_Sprite& c, int y) { drawKeypad240(c, y, toolNumber); });
+}
 
-    int cx = _sprite.width() / 2;
-    _sprite.setTextColor(COLOR_SUBTEXT);
-    _sprite.setTextSize(1);
-    _sprite.drawString("Assign to tool:", cx, 100);
+void TFTManager::drawKeypad240(LGFX_Sprite& canvas, int yOffset, const char* toolNumber) {
+    const int W = 240;
+    auto Y = [&](int y){ return y - yOffset; };
 
-    _sprite.setTextColor(COLOR_TEXT);
-    _sprite.setTextSize(4);
-    _sprite.drawString(toolNumber, cx, 130);
+    canvas.fillRect(0, Y(0), W, 28, COLOR_HEADER_BG);
+    canvas.setTextColor(COLOR_ACCENT);
+    canvas.setTextSize(1);
+    canvas.setTextDatum(MC_DATUM);
+    canvas.drawString("SpoolSense", W / 2, Y(14));
+    drawWifiIcon240(canvas, yOffset);
 
-    _sprite.setTextColor(COLOR_SUBTEXT);
-    _sprite.setTextSize(1);
-    _sprite.drawString("Press # to confirm", cx, 185);
+    int cx = W / 2;
+    canvas.setTextColor(COLOR_SUBTEXT);
+    canvas.setTextSize(1);
+    canvas.drawString("Assign to tool:", cx, Y(100));
 
-    blitCanvas();
+    canvas.setTextColor(COLOR_TEXT);
+    canvas.setTextSize(4);
+    canvas.drawString(toolNumber, cx, Y(130));
+
+    canvas.setTextColor(COLOR_SUBTEXT);
+    canvas.setTextSize(1);
+    canvas.drawString("Press # to confirm", cx, Y(185));
+}
+
+void TFTManager::renderTrayDashboard(const TrayDashboardState& state) {
+    render240Frame([&](LGFX_Sprite& c, int y) { _dashboard.draw(c, y, state); });
 }
 
 // ---------------------------------------------------------------------------
@@ -903,7 +906,7 @@ void TFTManager::renderKeypadEntry(const char* toolNumber) {
 // ---------------------------------------------------------------------------
 
 
-void TFTManager::drawWeightBar(int x, int y, int w, int h,
+void TFTManager::drawWeightBar(LGFX_Sprite& canvas, int x, int y, int w, int h,
                                 float remaining, float total) {
     float ratio = (total > 0) ? (remaining / total) : 0.0f;
     ratio = constrain(ratio, 0.0f, 1.0f);
@@ -912,17 +915,14 @@ void TFTManager::drawWeightBar(int x, int y, int w, int h,
     // Red bar when ≤10% remaining (visual alert for respool soon)
     uint32_t barColor = (ratio <= 0.1f) ? COLOR_BAR_LOW : COLOR_BAR_FG;
 
-    // Background tray
-    _sprite.fillRoundRect(x, y, w, h, h / 2, COLOR_BAR_BG);
-    // Filled portion (green or red)
+    canvas.fillRoundRect(x, y, w, h, h / 2, COLOR_BAR_BG);
     if (filled > 0) {
-        _sprite.fillRoundRect(x, y, filled, h, h / 2, barColor);
+        canvas.fillRoundRect(x, y, filled, h, h / 2, barColor);
     }
-    // Outline for definition
-    _sprite.drawRoundRect(x, y, w, h, h / 2, 0x555555);
+    canvas.drawRoundRect(x, y, w, h, h / 2, 0x555555);
 }
 
-void TFTManager::drawTagIcon(uint8_t tagType, int x, int y) {
+void TFTManager::drawTagIcon(LGFX_Sprite& canvas, uint8_t tagType, int x, int y) {
     const char* label = nullptr;
     uint32_t color = COLOR_SUBTEXT;
 
@@ -956,10 +956,10 @@ void TFTManager::drawTagIcon(uint8_t tagType, int x, int y) {
             return;  // unknown type; skip label
     }
 
-    _sprite.setTextColor(color);
-    _sprite.setTextSize(1);
-    _sprite.setTextDatum(TR_DATUM);  // top-right aligned
-    _sprite.drawString(label, x + 22, y);
+    canvas.setTextColor(color);
+    canvas.setTextSize(1);
+    canvas.setTextDatum(TR_DATUM);  // top-right aligned
+    canvas.drawString(label, x + 22, y);
 }
 
 uint32_t TFTManager::hexToRgb(const char* hex) {
