@@ -814,7 +814,10 @@ bool TFTManager::renderTextLandscape(const char* l1, const char* l2, uint32_t l1
     }
     const int STRIP_H = 32;
     _strip.setColorDepth(16);
-    if (!_strip.createSprite(W, STRIP_H)) return false;
+    if (!_strip.createSprite(W, STRIP_H)) {
+        Serial.println("TFT: landscape text strip alloc failed");
+        return false;
+    }
     for (int bandY = 0; bandY < H; bandY += STRIP_H) {
         _strip.fillScreen(COLOR_BG);
         drawStatusBar(_strip, bandY);
