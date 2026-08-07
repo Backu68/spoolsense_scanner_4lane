@@ -1176,10 +1176,12 @@ void WebServerManager::otaDownloadTask(void* param) {
     // Pause NFC during OTA
     NFCManager::getInstance().pauseScanTask();
 
-    // Free TFT sprite to reclaim ~57KB heap for SSL
+    // Stop display rendering and release any display buffers before the TLS
+    // handshake (PSRAM boards free their persistent framebuffer; strip-
+    // rendering boards reclaim an in-flight strip at most).
     if (self->_display) {
         self->_display->freeForOTA();
-        Serial.printf("OTA: Free heap after sprite release: %u\n", ESP.getFreeHeap());
+        Serial.printf("OTA: Free heap after display release: %u\n", ESP.getFreeHeap());
     }
 
     WiFiClientSecure secureClient;

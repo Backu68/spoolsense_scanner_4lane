@@ -89,11 +89,12 @@ task stack high-water marks, and reset reason.
 
 6. **No-PSRAM memory review**
 
-   - Confirm the C6 creates the expected 8-bit 240x240 sprite (about 57.6 kB)
-     and does not log sprite allocation failure. Exercise OTA `freeForOTA()`
-     and its direct progress/error drawing while NFC is active.
+   - Confirm the C6 holds no persistent framebuffer (strip rendering: frames
+     draw through a transient 240x32 16-bit strip, about 15.4 kB only while
+     rendering) and does not log strip allocation failure. Exercise OTA
+     `freeForOTA()` and its direct progress/error drawing while NFC is active.
    - Compare diagnostics before TFT init, after init, after one hour, and after
-     OTA sprite release. Pass: stable heap/largest-block floors, no allocation
+     OTA display release. Pass: stable heap/largest-block floors, no allocation
      failure, and no task stack high-water mark below the project safety floor.
    - Repeat on C5 (compile-enabled; validation pending).
 
