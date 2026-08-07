@@ -123,27 +123,28 @@ private:
     void taskLoop();
     void processQueue();
 
-    // --- Rendering ---
-    void renderBoot(const char* version);
-    void renderReady();
-    void renderSpoolScanned(const DisplaySpoolData& spool);
+    // --- Rendering (bool renderers report a dropped frame, see render240Frame) ---
+    bool renderBoot(const char* version);
+    bool renderReady();
+    bool renderSpoolScanned(const DisplaySpoolData& spool);
     void renderSpoolScannedLandscape(const DisplaySpoolData& spool);  // ILI9488 480x320
     void renderReadyLandscape();                                      // ILI9488 idle screen
     void renderTextLandscape(const char* l1, const char* l2, uint32_t l1Color);  // ILI9488 status text
     void renderLandscapeFrame(const DisplaySpoolData* spool);         // shared backend (nullptr=idle)
     void refreshStatusBar();                                          // periodic header-only update
-    void renderStatus(const char* line1, const char* line2 = nullptr);
-    void renderWriteResult(bool success, const char* tagFormat);
-    void renderKeypadEntry(const char* toolNumber);
-    void renderTrayDashboard(const TrayDashboardState& state);
+    bool renderStatus(const char* line1, const char* line2 = nullptr);
+    bool renderWriteResult(bool success, const char* tagFormat);
+    bool renderKeypadEntry(const char* toolNumber);
+    bool renderTrayDashboard(const TrayDashboardState& state);
 
     // Shared 240x240 backend: fills the background, runs drawBody over the
     // frame, and pushes it at the panel-aware origin. With a persistent full
     // framebuffer (PSRAM boards) that is one pass; otherwise a transient
     // 240x32 16-bit strip is drawn band-by-band. Bodies draw the full virtual
     // 240x240 frame shifted by -yOffset and must not read canvas dimensions
-    // for layout (the canvas may be a strip band).
-    template <typename DrawFn> void render240Frame(DrawFn&& drawBody);
+    // for layout (the canvas may be a strip band). Returns false if the frame
+    // was dropped because the strip could not be allocated.
+    template <typename DrawFn> bool render240Frame(DrawFn&& drawBody);
 
     // 240x240 frame bodies — same (canvas, yOffset) contract as drawLandscape*.
     void drawBoot240(LGFX_Sprite& canvas, int yOffset, const char* version);
@@ -178,6 +179,11 @@ private:
 
     LGFX _tft;
     LGFX_Sprite _sprite;
+    // Transient render canvas (strip bands, landscape strips, status bar).
+    // Member-owned rather than stack-local so freeForOTA can reclaim its
+    // buffer: vTaskDelete does not unwind the render task's stack, so a kill
+    // landing mid-frame would otherwise leak the allocation.
+    LGFX_Sprite _strip;
     TFTDriver _driver;
     TFTDashboard _dashboard;
 

@@ -35,6 +35,7 @@ static const uint32_t COLOR_ACCENT    = 0x4FC3F7;
 TFTManager::TFTManager(TFTDriver driver)
     : _tft(driver),
       _sprite(&_tft),
+      _strip(&_tft),
       _messageQueue(nullptr),
       _taskHandle(nullptr),
       _screenTimeoutMs(DEFAULT_SCREEN_TIMEOUT_MS),
@@ -288,24 +289,25 @@ void TFTManager::processQueue() {
                 _tft.setBrightness(255);
             }
 
+            bool rendered = true;
             switch (msg.state) {
                 case TFTState::Boot:
                     if (_driver == TFTDriver::ILI9488)
                         renderTextLandscape("SpoolSense", msg.statusText, COLOR_ACCENT);
                     else
-                        renderBoot(msg.statusText);
+                        rendered = renderBoot(msg.statusText);
                     break;
                 case TFTState::WifiConnecting:
                     if (_driver == TFTDriver::ILI9488)
                         renderTextLandscape(msg.statusText, msg.statusText2[0] ? msg.statusText2 : nullptr, COLOR_TEXT);
                     else
-                        renderStatus(msg.statusText, msg.statusText2[0] ? msg.statusText2 : nullptr);
+                        rendered = renderStatus(msg.statusText, msg.statusText2[0] ? msg.statusText2 : nullptr);
                     break;
                 case TFTState::Ready:
                     if (_driver == TFTDriver::ILI9488) {
                         renderReadyLandscape();
                     } else {
-                        renderReady();
+                        rendered = renderReady();
                     }
                     break;
                 case TFTState::SpoolScanned:
@@ -320,14 +322,14 @@ void TFTManager::processQueue() {
                     if (_driver == TFTDriver::ILI9488) {
                         renderSpoolScannedLandscape(msg.spool);
                     } else {
-                        renderSpoolScanned(msg.spool);
+                        rendered = renderSpoolScanned(msg.spool);
                     }
                     break;
                 case TFTState::Writing:
                     if (_driver == TFTDriver::ILI9488)
                         renderTextLandscape("Writing...", msg.statusText, COLOR_TEXT);
                     else
-                        renderStatus("Writing...", msg.statusText);
+                        rendered = renderStatus("Writing...", msg.statusText);
                     break;
                 case TFTState::WriteResult:
                     if (_driver == TFTDriver::ILI9488)
@@ -335,29 +337,31 @@ void TFTManager::processQueue() {
                                             msg.statusText,
                                             msg.writeSuccess ? COLOR_BAR_FG : COLOR_BAR_LOW);
                     else
-                        renderWriteResult(msg.writeSuccess, msg.statusText);
+                        rendered = renderWriteResult(msg.writeSuccess, msg.statusText);
                     break;
                 case TFTState::KeypadEntry:
                     if (_driver == TFTDriver::ILI9488)
                         renderTextLandscape("Tool", msg.statusText, COLOR_ACCENT);
                     else
-                        renderKeypadEntry(msg.statusText);
+                        rendered = renderKeypadEntry(msg.statusText);
                     break;
                 case TFTState::Error:
                     if (_driver == TFTDriver::ILI9488)
                         renderTextLandscape("Error", msg.statusText, COLOR_BAR_LOW);
                     else
-                        renderStatus("Error", msg.statusText);
+                        rendered = renderStatus("Error", msg.statusText);
                     break;
                 case TFTState::TrayDashboard:
-                    renderTrayDashboard(msg.dashboardState);
+                    rendered = renderTrayDashboard(msg.dashboardState);
                     break;
             }
             // Commit state only after a successful (guarded) render, so the idle
             // status-bar refresh never paints a header over a screen that failed
-            // to render (dropped frame on a lock timeout).
-            _currentState = msg.state;
-            _lastStatusRefreshMs = millis();
+            // to render (frame dropped on a lock timeout or strip alloc failure).
+            if (rendered) {
+                _currentState = msg.state;
+                _lastStatusRefreshMs = millis();
+            }
         }
     }
 
@@ -444,35 +448,35 @@ void TFTManager::blitCanvas() {
 }
 
 // Shared 240x240 backend — same shape as renderLandscapeFrame: persistent full
-// sprite when one exists, otherwise a reused 240x32 16-bit strip drawn
+// sprite when one exists, otherwise the transient 240x32 16-bit strip drawn
 // band-by-band (bands overhanging 240 rows clip at the panel edge).
 template <typename DrawFn>
-void TFTManager::render240Frame(DrawFn&& drawBody) {
+bool TFTManager::render240Frame(DrawFn&& drawBody) {
     if (_fullFrame) {
         _sprite.fillScreen(COLOR_BG);
         drawBody(_sprite, 0);
         blitCanvas();
-        return;
+        return true;
     }
 
     const int STRIP_H = 32;
-    LGFX_Sprite strip(&_tft);
-    strip.setColorDepth(16);
-    if (!strip.createSprite(240, STRIP_H)) {
+    _strip.setColorDepth(16);
+    if (!_strip.createSprite(240, STRIP_H)) {
         Serial.println("TFT: 240 strip alloc failed");
-        return;
+        return false;
     }
     clearWideGutters();
     for (int bandY = 0; bandY < 240; bandY += STRIP_H) {
-        strip.fillScreen(COLOR_BG);
-        drawBody(strip, bandY);
-        strip.pushSprite(_blitOx, _blitOy + bandY);
+        _strip.fillScreen(COLOR_BG);
+        drawBody(_strip, bandY);
+        _strip.pushSprite(_blitOx, _blitOy + bandY);
     }
-    strip.deleteSprite();
+    _strip.deleteSprite();
+    return true;
 }
 
-void TFTManager::renderBoot(const char* version) {
-    render240Frame([&](LGFX_Sprite& c, int y) { drawBoot240(c, y, version); });
+bool TFTManager::renderBoot(const char* version) {
+    return render240Frame([&](LGFX_Sprite& c, int y) { drawBoot240(c, y, version); });
 }
 
 void TFTManager::drawBoot240(LGFX_Sprite& canvas, int yOffset, const char* version) {
@@ -489,8 +493,8 @@ void TFTManager::drawBoot240(LGFX_Sprite& canvas, int yOffset, const char* versi
     canvas.drawString(version, W / 2, Y(H / 2 + 20));
 }
 
-void TFTManager::renderReady() {
-    render240Frame([&](LGFX_Sprite& c, int y) { drawReady240(c, y); });
+bool TFTManager::renderReady() {
+    return render240Frame([&](LGFX_Sprite& c, int y) { drawReady240(c, y); });
 }
 
 void TFTManager::drawReady240(LGFX_Sprite& canvas, int yOffset) {
@@ -515,8 +519,8 @@ void TFTManager::drawReady240(LGFX_Sprite& canvas, int yOffset) {
     canvas.drawString("Tap a spool to scan", cx, Y(H - 16));
 }
 
-void TFTManager::renderSpoolScanned(const DisplaySpoolData& spool) {
-    render240Frame([&](LGFX_Sprite& c, int y) { drawSpool240(c, y, spool); });
+bool TFTManager::renderSpoolScanned(const DisplaySpoolData& spool) {
+    return render240Frame([&](LGFX_Sprite& c, int y) { drawSpool240(c, y, spool); });
 }
 
 void TFTManager::drawSpool240(LGFX_Sprite& canvas, int yOffset, const DisplaySpoolData& spool) {
@@ -736,20 +740,19 @@ void TFTManager::renderLandscapeFrame(const DisplaySpoolData* spool) {
     }
 
     const int STRIP_H = 32;
-    LGFX_Sprite strip(&_tft);
-    strip.setColorDepth(16);
-    if (!strip.createSprite(W, STRIP_H)) {
+    _strip.setColorDepth(16);
+    if (!_strip.createSprite(W, STRIP_H)) {
         Serial.println("TFT: landscape strip alloc failed");
         return;
     }
     for (int bandY = 0; bandY < H; bandY += STRIP_H) {
-        strip.fillScreen(COLOR_BG);
-        drawStatusBar(strip, bandY);
-        if (spool) drawLandscapeSpool(strip, bandY, *spool);
-        else       drawLandscapeReady(strip, bandY);
-        strip.pushSprite(0, bandY);
+        _strip.fillScreen(COLOR_BG);
+        drawStatusBar(_strip, bandY);
+        if (spool) drawLandscapeSpool(_strip, bandY, *spool);
+        else       drawLandscapeReady(_strip, bandY);
+        _strip.pushSprite(0, bandY);
     }
-    strip.deleteSprite();
+    _strip.deleteSprite();
 }
 
 void TFTManager::renderSpoolScannedLandscape(const DisplaySpoolData& spool) {
@@ -798,16 +801,15 @@ void TFTManager::renderTextLandscape(const char* l1, const char* l2, uint32_t l1
         Serial.println("TFT: PSRAM text sprite failed, using strips");
     }
     const int STRIP_H = 32;
-    LGFX_Sprite strip(&_tft);
-    strip.setColorDepth(16);
-    if (!strip.createSprite(W, STRIP_H)) return;
+    _strip.setColorDepth(16);
+    if (!_strip.createSprite(W, STRIP_H)) return;
     for (int bandY = 0; bandY < H; bandY += STRIP_H) {
-        strip.fillScreen(COLOR_BG);
-        drawStatusBar(strip, bandY);
-        drawLandscapeText(strip, bandY, l1, l2, l1Color);
-        strip.pushSprite(0, bandY);
+        _strip.fillScreen(COLOR_BG);
+        drawStatusBar(_strip, bandY);
+        drawLandscapeText(_strip, bandY, l1, l2, l1Color);
+        _strip.pushSprite(0, bandY);
     }
-    strip.deleteSprite();
+    _strip.deleteSprite();
 }
 
 // Repaint only the top status band (cheap, ~24KB strip) so idle status stays
@@ -820,17 +822,16 @@ void TFTManager::refreshStatusBar() {
     SharedSPIBus::Guard g;
     if (!g) return;
     LandscapeLayout L = landscapeLayout(480, 320);
-    LGFX_Sprite bar(&_tft);
-    bar.setColorDepth(16);
-    if (!bar.createSprite(480, L.headerH)) return;
-    bar.fillScreen(COLOR_BG);
-    drawStatusBar(bar, 0);
-    bar.pushSprite(0, 0);
-    bar.deleteSprite();
+    _strip.setColorDepth(16);
+    if (!_strip.createSprite(480, L.headerH)) return;
+    _strip.fillScreen(COLOR_BG);
+    drawStatusBar(_strip, 0);
+    _strip.pushSprite(0, 0);
+    _strip.deleteSprite();
 }
 
-void TFTManager::renderStatus(const char* line1, const char* line2) {
-    render240Frame([&](LGFX_Sprite& c, int y) { drawStatus240(c, y, line1, line2); });
+bool TFTManager::renderStatus(const char* line1, const char* line2) {
+    return render240Frame([&](LGFX_Sprite& c, int y) { drawStatus240(c, y, line1, line2); });
 }
 
 void TFTManager::drawStatus240(LGFX_Sprite& canvas, int yOffset,
@@ -858,8 +859,8 @@ void TFTManager::drawStatus240(LGFX_Sprite& canvas, int yOffset,
     }
 }
 
-void TFTManager::renderWriteResult(bool success, const char* tagFormat) {
-    render240Frame([&](LGFX_Sprite& c, int y) { drawWriteResult240(c, y, success, tagFormat); });
+bool TFTManager::renderWriteResult(bool success, const char* tagFormat) {
+    return render240Frame([&](LGFX_Sprite& c, int y) { drawWriteResult240(c, y, success, tagFormat); });
 }
 
 void TFTManager::drawWriteResult240(LGFX_Sprite& canvas, int yOffset,
@@ -889,8 +890,8 @@ void TFTManager::drawWriteResult240(LGFX_Sprite& canvas, int yOffset,
     canvas.drawString(tagFormat, cx, Y(cy + 26));
 }
 
-void TFTManager::renderKeypadEntry(const char* toolNumber) {
-    render240Frame([&](LGFX_Sprite& c, int y) { drawKeypad240(c, y, toolNumber); });
+bool TFTManager::renderKeypadEntry(const char* toolNumber) {
+    return render240Frame([&](LGFX_Sprite& c, int y) { drawKeypad240(c, y, toolNumber); });
 }
 
 void TFTManager::drawKeypad240(LGFX_Sprite& canvas, int yOffset, const char* toolNumber) {
@@ -918,8 +919,8 @@ void TFTManager::drawKeypad240(LGFX_Sprite& canvas, int yOffset, const char* too
     canvas.drawString("Press # to confirm", cx, Y(185));
 }
 
-void TFTManager::renderTrayDashboard(const TrayDashboardState& state) {
-    render240Frame([&](LGFX_Sprite& c, int y) { _dashboard.draw(c, y, state); });
+bool TFTManager::renderTrayDashboard(const TrayDashboardState& state) {
+    return render240Frame([&](LGFX_Sprite& c, int y) { _dashboard.draw(c, y, state); });
 }
 
 // ---------------------------------------------------------------------------
@@ -1076,6 +1077,11 @@ void TFTManager::freeForOTA() {
         _taskHandle = nullptr;
         Serial.println("TFTManager: Task stopped for OTA");
     }
+
+    // vTaskDelete above does not unwind the render task's stack, so a kill
+    // landing mid-frame leaves the transient strip allocated — reclaim it
+    // here (safe no-op when it holds no buffer).
+    _strip.deleteSprite();
 
     // Release the persistent framebuffer for the OTA TLS/HTTPS buffers (#59).
     // Strip-rendering boards hold no framebuffer between frames.
