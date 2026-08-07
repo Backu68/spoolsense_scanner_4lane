@@ -9,9 +9,12 @@
 #include <WiFi.h>
 #include <Arduino.h>
 
-// TFT display controller for 240x240 ST7789 or GC9A01 (round). Manages sprite rendering to PSRAM
-// (16-bit color), screen timeout/breathing animations, and OTA progress. Task runs on core 0.
-// Sprite reduces flicker vs direct-to-panel rendering; 5ms task loop allows other tasks to run.
+// TFT display controller (ST7789/GC9A01 240x240, ILI9341/ILI9488). All screens
+// render through sprites for flicker-free updates: PSRAM boards hold a
+// persistent 16-bit full framebuffer, no-PSRAM boards draw each frame through
+// a transient 16-bit strip band (see render240Frame / renderLandscapeFrame).
+// Also manages screen timeout, low-spool breathing, and OTA progress. Task
+// runs on core 0.
 
 // Color constants for UI elements
 // ────────────────────────────────────────────────────────────────────────
@@ -79,23 +82,19 @@ void TFTManager::begin() {
     _tft.fillScreen(COLOR_BG);
 
 #ifdef BOARD_HAS_PSRAM
-    // 16-bit color needs PSRAM on S3-DevKitC: 240x240x2 bytes = 115KB, internal RAM only ~50KB free
+    // Persistent 16-bit full framebuffer in PSRAM (240x240x2 = 115KB). On
+    // failure render240Frame falls back to strip rendering, same as no-PSRAM.
     _sprite.setPsram(true);
     _sprite.setColorDepth(16);
-    if (!_sprite.createSprite(240, 240)) {
-        Serial.println("TFTManager: PSRAM sprite failed, falling back to 8-bit internal RAM");
-        _sprite.setPsram(false);
-        _sprite.setColorDepth(8);  // 8-bit indexed color fits in internal RAM; reduced colors
-        if (!_sprite.createSprite(240, 240)) {
-            Serial.println("TFTManager: WARNING — sprite allocation failed");
-        }
-    }
-#else
-    _sprite.setColorDepth(8);
-    if (!_sprite.createSprite(240, 240)) {
-        Serial.println("TFTManager: WARNING — sprite allocation failed");
+    _fullFrame = _sprite.createSprite(240, 240);
+    if (!_fullFrame) {
+        Serial.println("TFTManager: PSRAM sprite failed; using strip rendering");
     }
 #endif
+    // Without PSRAM no persistent framebuffer is held: render240Frame draws
+    // each frame through a transient 240x32 16-bit strip (15.4KB during a
+    // render vs 57.6KB held forever at 8-bit), keeping ~42KB of internal RAM
+    // free for WiFi/TLS/JSON and giving these panels full 16-bit colour.
 
     _messageQueue = xQueueCreate(8, sizeof(TFTMessage));
     if (_messageQueue == nullptr) {
@@ -421,33 +420,55 @@ void TFTManager::processQueue() {
 // Rendering
 // ---------------------------------------------------------------------------
 
-void TFTManager::blitCanvas() {
-    // On wide panels clear the gutters around the centered 240x240 canvas so a
-    // prior full-screen landscape frame doesn't linger behind legacy views.
-    // (Runs inside processQueue's shared-SPI guard; no-op on 240x240 panels.)
-    if (_wide) {
-        const int W = _tft.width(), H = _tft.height();
-        if (_blitOx > 0) {
-            _tft.fillRect(0, 0, _blitOx, H, COLOR_BG);
-            _tft.fillRect(_blitOx + 240, 0, W - _blitOx - 240, H, COLOR_BG);
-        }
-        if (_blitOy > 0) {
-            _tft.fillRect(_blitOx, 0, 240, _blitOy, COLOR_BG);
-            _tft.fillRect(_blitOx, _blitOy + 240, 240, H - _blitOy - 240, COLOR_BG);
-        }
+// On wide panels clear the gutters around the centered 240x240 area so a
+// prior full-screen landscape frame doesn't linger behind legacy views.
+// (Runs inside processQueue's shared-SPI guard; no-op on 240x240 panels.)
+void TFTManager::clearWideGutters() {
+    if (!_wide) return;
+    const int W = _tft.width(), H = _tft.height();
+    if (_blitOx > 0) {
+        _tft.fillRect(0, 0, _blitOx, H, COLOR_BG);
+        _tft.fillRect(_blitOx + 240, 0, W - _blitOx - 240, H, COLOR_BG);
     }
+    if (_blitOy > 0) {
+        _tft.fillRect(_blitOx, 0, 240, _blitOy, COLOR_BG);
+        _tft.fillRect(_blitOx, _blitOy + 240, 240, H - _blitOy - 240, COLOR_BG);
+    }
+}
+
+void TFTManager::blitCanvas() {
+    clearWideGutters();
     // 240x240 sprite pushed at the panel-aware origin: (0,0) on 240x240 panels,
     // centered on wide panels (ILI9488).
     _sprite.pushSprite(_blitOx, _blitOy);
 }
 
-// Shared 240x240 backend: full persistent sprite. Bodies take (canvas, yOffset)
-// so this can flip to strip bands without touching them.
+// Shared 240x240 backend — same shape as renderLandscapeFrame: persistent full
+// sprite when one exists, otherwise a reused 240x32 16-bit strip drawn
+// band-by-band (bands overhanging 240 rows clip at the panel edge).
 template <typename DrawFn>
 void TFTManager::render240Frame(DrawFn&& drawBody) {
-    _sprite.fillScreen(COLOR_BG);
-    drawBody(_sprite, 0);
-    blitCanvas();
+    if (_fullFrame) {
+        _sprite.fillScreen(COLOR_BG);
+        drawBody(_sprite, 0);
+        blitCanvas();
+        return;
+    }
+
+    const int STRIP_H = 32;
+    LGFX_Sprite strip(&_tft);
+    strip.setColorDepth(16);
+    if (!strip.createSprite(240, STRIP_H)) {
+        Serial.println("TFT: 240 strip alloc failed");
+        return;
+    }
+    clearWideGutters();
+    for (int bandY = 0; bandY < 240; bandY += STRIP_H) {
+        strip.fillScreen(COLOR_BG);
+        drawBody(strip, bandY);
+        strip.pushSprite(_blitOx, _blitOy + bandY);
+    }
+    strip.deleteSprite();
 }
 
 void TFTManager::renderBoot(const char* version) {
@@ -1056,9 +1077,13 @@ void TFTManager::freeForOTA() {
         Serial.println("TFTManager: Task stopped for OTA");
     }
 
-    // Delete sprite to recover 57.6KB heap for OTA SSL/HTTPS buffer (16-bit color on 240x240)
-    _sprite.deleteSprite();
-    Serial.printf("TFTManager: Sprite freed, heap now %u\n", ESP.getFreeHeap());
+    // Release the persistent framebuffer for the OTA TLS/HTTPS buffers (#59).
+    // Strip-rendering boards hold no framebuffer between frames.
+    if (_fullFrame) {
+        _sprite.deleteSprite();
+        _fullFrame = false;
+        Serial.printf("TFTManager: Sprite freed, heap now %u\n", ESP.getFreeHeap());
+    }
 
     SharedSPIBus::Guard busGuard;
     if (!busGuard) {

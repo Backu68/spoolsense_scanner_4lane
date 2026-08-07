@@ -138,9 +138,11 @@ private:
     void renderTrayDashboard(const TrayDashboardState& state);
 
     // Shared 240x240 backend: fills the background, runs drawBody over the
-    // frame, and pushes it at the panel-aware origin. Bodies draw the full
-    // virtual 240x240 frame shifted by -yOffset and must not read canvas
-    // dimensions for layout (the canvas may be a strip band).
+    // frame, and pushes it at the panel-aware origin. With a persistent full
+    // framebuffer (PSRAM boards) that is one pass; otherwise a transient
+    // 240x32 16-bit strip is drawn band-by-band. Bodies draw the full virtual
+    // 240x240 frame shifted by -yOffset and must not read canvas dimensions
+    // for layout (the canvas may be a strip band).
     template <typename DrawFn> void render240Frame(DrawFn&& drawBody);
 
     // 240x240 frame bodies — same (canvas, yOffset) contract as drawLandscape*.
@@ -156,6 +158,7 @@ private:
                        float remaining, float total);
     void drawTagIcon(LGFX_Sprite& canvas, uint8_t tagType, int x, int y);
     void blitCanvas();  // push _sprite at the panel-aware (centered on wide panels) origin
+    void clearWideGutters();  // blank the panel around the centered 240x240 area
     // Draw the full 480x320 landscape layout into any canvas, shifting all Y by
     // -yOffset (so one function fills a full sprite or a strip band).
     void drawLandscapeSpool(LGFX_Sprite& canvas, int yOffset, const DisplaySpoolData& spool);
@@ -181,6 +184,7 @@ private:
     QueueHandle_t _messageQueue;
     TaskHandle_t _taskHandle;
     bool _began = false;  // panel + bus initialized; render task must not start otherwise
+    bool _fullFrame = false;  // persistent 240x240 _sprite exists; false = strip rendering
     bool _wide = false;   // panel larger than 240x240 (ILI9488) — landscape-capable
     int  _blitOx = 0;     // centered-blit origin for the 240x240 sprite on wide panels
     int  _blitOy = 0;
