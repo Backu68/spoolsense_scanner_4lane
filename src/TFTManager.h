@@ -123,23 +123,43 @@ private:
     void taskLoop();
     void processQueue();
 
-    // --- Rendering ---
-    void renderBoot(const char* version);
-    void renderReady();
-    void renderSpoolScanned(const DisplaySpoolData& spool);
-    void renderSpoolScannedLandscape(const DisplaySpoolData& spool);  // ILI9488 480x320
-    void renderReadyLandscape();                                      // ILI9488 idle screen
-    void renderTextLandscape(const char* l1, const char* l2, uint32_t l1Color);  // ILI9488 status text
-    void renderLandscapeFrame(const DisplaySpoolData* spool);         // shared backend (nullptr=idle)
+    // --- Rendering (bool renderers report a dropped frame, see render240Frame) ---
+    bool renderBoot(const char* version);
+    bool renderReady();
+    bool renderSpoolScanned(const DisplaySpoolData& spool);
+    bool renderSpoolScannedLandscape(const DisplaySpoolData& spool);  // ILI9488 480x320
+    bool renderReadyLandscape();                                      // ILI9488 idle screen
+    bool renderTextLandscape(const char* l1, const char* l2, uint32_t l1Color);  // ILI9488 status text
+    bool renderLandscapeFrame(const DisplaySpoolData* spool);         // shared backend (nullptr=idle)
     void refreshStatusBar();                                          // periodic header-only update
-    void renderStatus(const char* line1, const char* line2 = nullptr);
-    void renderWriteResult(bool success, const char* tagFormat);
-    void renderKeypadEntry(const char* toolNumber);
+    bool renderStatus(const char* line1, const char* line2 = nullptr);
+    bool renderWriteResult(bool success, const char* tagFormat);
+    bool renderKeypadEntry(const char* toolNumber);
+    bool renderTrayDashboard(const TrayDashboardState& state);
 
-    // --- Drawing helpers ---
-    void drawWeightBar(int x, int y, int w, int h, float remaining, float total);
-    void drawTagIcon(uint8_t tagType, int x, int y);
+    // Shared 240x240 backend: fills the background, runs drawBody over the
+    // frame, and pushes it at the panel-aware origin. With a persistent full
+    // framebuffer (PSRAM boards) that is one pass; otherwise a transient
+    // 240x32 16-bit strip is drawn band-by-band. Bodies draw the full virtual
+    // 240x240 frame shifted by -yOffset and must not read canvas dimensions
+    // for layout (the canvas may be a strip band). Returns false if the frame
+    // was dropped because the strip could not be allocated.
+    template <typename DrawFn> bool render240Frame(DrawFn&& drawBody);
+
+    // 240x240 frame bodies — same (canvas, yOffset) contract as drawLandscape*.
+    void drawBoot240(LGFX_Sprite& canvas, int yOffset, const char* version);
+    void drawReady240(LGFX_Sprite& canvas, int yOffset);
+    void drawSpool240(LGFX_Sprite& canvas, int yOffset, const DisplaySpoolData& spool);
+    void drawStatus240(LGFX_Sprite& canvas, int yOffset, const char* line1, const char* line2);
+    void drawWriteResult240(LGFX_Sprite& canvas, int yOffset, bool success, const char* tagFormat);
+    void drawKeypad240(LGFX_Sprite& canvas, int yOffset, const char* toolNumber);
+
+    // --- Drawing helpers (y arrives already band-translated by the caller) ---
+    void drawWeightBar(LGFX_Sprite& canvas, int x, int y, int w, int h,
+                       float remaining, float total);
+    void drawTagIcon(LGFX_Sprite& canvas, uint8_t tagType, int x, int y);
     void blitCanvas();  // push _sprite at the panel-aware (centered on wide panels) origin
+    void clearWideGutters();  // blank the panel around the centered 240x240 area
     // Draw the full 480x320 landscape layout into any canvas, shifting all Y by
     // -yOffset (so one function fills a full sprite or a strip band).
     void drawLandscapeSpool(LGFX_Sprite& canvas, int yOffset, const DisplaySpoolData& spool);
@@ -153,18 +173,28 @@ private:
     void drawSpoolImage(LGFX_Sprite& canvas, int cx, int cy, uint32_t tint, int yOffset,
                         int size = 0);
     void drawWifiBars(LGFX_Sprite& canvas, int x, int y, int rssi, bool connected);
-    void drawWifiIcon240();  // signal bars in the 240x240 header's top-right
+    void drawWifiIcon240(LGFX_Sprite& canvas, int yOffset);  // signal bars in the 240x240 header's top-right
     uint32_t hexToRgb(const char* hex);
     uint32_t dimColor(uint32_t color, uint8_t brightness); // for low-spool breathing
 
     LGFX _tft;
     LGFX_Sprite _sprite;
+    // Transient render canvas (strip bands, landscape strips, status bar).
+    // Member-owned rather than stack-local so freeForOTA can reclaim its
+    // buffer: vTaskDelete does not unwind the render task's stack, so a kill
+    // landing mid-frame would otherwise leak the allocation.
+    LGFX_Sprite _strip;
     TFTDriver _driver;
     TFTDashboard _dashboard;
 
     QueueHandle_t _messageQueue;
     TaskHandle_t _taskHandle;
+    // freeForOTA sets this to park the render task at a clean point (no bus
+    // guard held, no transient sprite allocated) before deleting it —
+    // vTaskDelete does not unwind the victim's stack.
+    volatile bool _stopRequested = false;
     bool _began = false;  // panel + bus initialized; render task must not start otherwise
+    bool _fullFrame = false;  // persistent 240x240 _sprite exists; false = strip rendering
     bool _wide = false;   // panel larger than 240x240 (ILI9488) — landscape-capable
     int  _blitOx = 0;     // centered-blit origin for the 240x240 sprite on wide panels
     int  _blitOy = 0;

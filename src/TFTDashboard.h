@@ -4,11 +4,14 @@
 
 class TFTDashboard {
 public:
-    void render(LGFX_Sprite* sprite, const TrayDashboardState& state, int offX = 0, int offY = 0);
+    // Draw the 240x240 tray grid into `canvas`, shifting all Y by -yOffset —
+    // same body contract as TFTManager's draw*240 functions. The caller's
+    // backend owns background fill and pushing to the panel.
+    void draw(LGFX_Sprite& canvas, int yOffset, const TrayDashboardState& state);
 
 private:
-    void renderCell(LGFX_Sprite* sprite, int x, int y, int w, int h,
-                    const TrayData& tray, bool small);
-    void renderEmptyCell(LGFX_Sprite* sprite, int x, int y, int w, int h, bool small);
+    void drawCell(LGFX_Sprite& canvas, int x, int y, int w, int h,
+                  const TrayData& tray, bool small);
+    void drawEmptyCell(LGFX_Sprite& canvas, int x, int y, int w, int h, bool small);
     uint32_t contrastTextColor(uint8_t r, uint8_t g, uint8_t b);
 };

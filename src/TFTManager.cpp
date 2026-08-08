@@ -9,9 +9,12 @@
 #include <WiFi.h>
 #include <Arduino.h>
 
-// TFT display controller for 240x240 ST7789 or GC9A01 (round). Manages sprite rendering to PSRAM
-// (16-bit color), screen timeout/breathing animations, and OTA progress. Task runs on core 0.
-// Sprite reduces flicker vs direct-to-panel rendering; 5ms task loop allows other tasks to run.
+// TFT display controller (ST7789/GC9A01 240x240, ILI9341/ILI9488). All screens
+// render through sprites for flicker-free updates: PSRAM boards hold a
+// persistent 16-bit full framebuffer, no-PSRAM boards draw each frame through
+// a transient 16-bit strip band (see render240Frame / renderLandscapeFrame).
+// Also manages screen timeout, low-spool breathing, and OTA progress. Task
+// runs on core 0.
 
 // Color constants for UI elements
 // ────────────────────────────────────────────────────────────────────────
@@ -32,6 +35,7 @@ static const uint32_t COLOR_ACCENT    = 0x4FC3F7;
 TFTManager::TFTManager(TFTDriver driver)
     : _tft(driver),
       _sprite(&_tft),
+      _strip(&_tft),
       _messageQueue(nullptr),
       _taskHandle(nullptr),
       _screenTimeoutMs(DEFAULT_SCREEN_TIMEOUT_MS),
@@ -79,23 +83,19 @@ void TFTManager::begin() {
     _tft.fillScreen(COLOR_BG);
 
 #ifdef BOARD_HAS_PSRAM
-    // 16-bit color needs PSRAM on S3-DevKitC: 240x240x2 bytes = 115KB, internal RAM only ~50KB free
+    // Persistent 16-bit full framebuffer in PSRAM (240x240x2 = 115KB). On
+    // failure render240Frame falls back to strip rendering, same as no-PSRAM.
     _sprite.setPsram(true);
     _sprite.setColorDepth(16);
-    if (!_sprite.createSprite(240, 240)) {
-        Serial.println("TFTManager: PSRAM sprite failed, falling back to 8-bit internal RAM");
-        _sprite.setPsram(false);
-        _sprite.setColorDepth(8);  // 8-bit indexed color fits in internal RAM; reduced colors
-        if (!_sprite.createSprite(240, 240)) {
-            Serial.println("TFTManager: WARNING — sprite allocation failed");
-        }
-    }
-#else
-    _sprite.setColorDepth(8);
-    if (!_sprite.createSprite(240, 240)) {
-        Serial.println("TFTManager: WARNING — sprite allocation failed");
+    _fullFrame = _sprite.createSprite(240, 240);
+    if (!_fullFrame) {
+        Serial.println("TFTManager: PSRAM sprite failed; using strip rendering");
     }
 #endif
+    // Without PSRAM no persistent framebuffer is held: render240Frame draws
+    // each frame through a transient 240x32 16-bit strip (15.4KB during a
+    // render vs 57.6KB held forever at 8-bit), keeping ~42KB of internal RAM
+    // free for WiFi/TLS/JSON and giving these panels full 16-bit colour.
 
     _messageQueue = xQueueCreate(8, sizeof(TFTMessage));
     if (_messageQueue == nullptr) {
@@ -264,6 +264,12 @@ void TFTManager::taskFunc(void* param) {
 
 void TFTManager::taskLoop() {
     while (true) {
+        if (_stopRequested) {
+            // Park at a clean point — the bus guard and transient strip are
+            // released every iteration — so freeForOTA can delete this task
+            // without stranding the shared-SPI mutex or a sprite buffer.
+            vTaskSuspend(nullptr);
+        }
         processQueue();
         MemoryDiagnostics::reportSelf(MemoryDiagnostics::Task::TFT);
         vTaskDelay(pdMS_TO_TICKS(20));  // 50 Hz update rate; allows other tasks to run between renders
@@ -289,76 +295,83 @@ void TFTManager::processQueue() {
                 _tft.setBrightness(255);
             }
 
+            bool rendered = true;
             switch (msg.state) {
                 case TFTState::Boot:
                     if (_driver == TFTDriver::ILI9488)
-                        renderTextLandscape("SpoolSense", msg.statusText, COLOR_ACCENT);
+                        rendered = renderTextLandscape("SpoolSense", msg.statusText, COLOR_ACCENT);
                     else
-                        renderBoot(msg.statusText);
+                        rendered = renderBoot(msg.statusText);
                     break;
                 case TFTState::WifiConnecting:
                     if (_driver == TFTDriver::ILI9488)
-                        renderTextLandscape(msg.statusText, msg.statusText2[0] ? msg.statusText2 : nullptr, COLOR_TEXT);
+                        rendered = renderTextLandscape(msg.statusText, msg.statusText2[0] ? msg.statusText2 : nullptr, COLOR_TEXT);
                     else
-                        renderStatus(msg.statusText, msg.statusText2[0] ? msg.statusText2 : nullptr);
+                        rendered = renderStatus(msg.statusText, msg.statusText2[0] ? msg.statusText2 : nullptr);
                     break;
                 case TFTState::Ready:
                     if (_driver == TFTDriver::ILI9488) {
-                        renderReadyLandscape();
+                        rendered = renderReadyLandscape();
                     } else {
-                        renderReady();
+                        rendered = renderReady();
                     }
                     break;
                 case TFTState::SpoolScanned:
-                    // Breathing animation for low-weight spools (< 100g): visual cue for respool
-                    _isBreathing = (msg.spool.remainingWeight > 0 &&
-                                    msg.spool.remainingWeight <= (float)ConfigurationManager::getInstance().getLowSpoolThreshold());
-                    if (_isBreathing) {
-                        _breathColor = hexToRgb(msg.spool.colorHex);
-                        _breathBrightness = 255;
-                        _breathDirection = -1;  // start dimming
-                    }
                     if (_driver == TFTDriver::ILI9488) {
-                        renderSpoolScannedLandscape(msg.spool);
+                        rendered = renderSpoolScannedLandscape(msg.spool);
                     } else {
-                        renderSpoolScanned(msg.spool);
+                        rendered = renderSpoolScanned(msg.spool);
+                    }
+                    // Breathing animation for low-weight spools (< 100g): visual
+                    // cue for respool. Armed only for frames actually displayed —
+                    // a dropped frame must not pulse whatever screen it left up.
+                    if (rendered) {
+                        _isBreathing = (msg.spool.remainingWeight > 0 &&
+                                        msg.spool.remainingWeight <= (float)ConfigurationManager::getInstance().getLowSpoolThreshold());
+                        if (_isBreathing) {
+                            _breathColor = hexToRgb(msg.spool.colorHex);
+                            _breathBrightness = 255;
+                            _breathDirection = -1;  // start dimming
+                        }
                     }
                     break;
                 case TFTState::Writing:
                     if (_driver == TFTDriver::ILI9488)
-                        renderTextLandscape("Writing...", msg.statusText, COLOR_TEXT);
+                        rendered = renderTextLandscape("Writing...", msg.statusText, COLOR_TEXT);
                     else
-                        renderStatus("Writing...", msg.statusText);
+                        rendered = renderStatus("Writing...", msg.statusText);
                     break;
                 case TFTState::WriteResult:
                     if (_driver == TFTDriver::ILI9488)
-                        renderTextLandscape(msg.writeSuccess ? "Success" : "Write Failed",
-                                            msg.statusText,
-                                            msg.writeSuccess ? COLOR_BAR_FG : COLOR_BAR_LOW);
+                        rendered = renderTextLandscape(msg.writeSuccess ? "Success" : "Write Failed",
+                                                       msg.statusText,
+                                                       msg.writeSuccess ? COLOR_BAR_FG : COLOR_BAR_LOW);
                     else
-                        renderWriteResult(msg.writeSuccess, msg.statusText);
+                        rendered = renderWriteResult(msg.writeSuccess, msg.statusText);
                     break;
                 case TFTState::KeypadEntry:
                     if (_driver == TFTDriver::ILI9488)
-                        renderTextLandscape("Tool", msg.statusText, COLOR_ACCENT);
+                        rendered = renderTextLandscape("Tool", msg.statusText, COLOR_ACCENT);
                     else
-                        renderKeypadEntry(msg.statusText);
+                        rendered = renderKeypadEntry(msg.statusText);
                     break;
                 case TFTState::Error:
                     if (_driver == TFTDriver::ILI9488)
-                        renderTextLandscape("Error", msg.statusText, COLOR_BAR_LOW);
+                        rendered = renderTextLandscape("Error", msg.statusText, COLOR_BAR_LOW);
                     else
-                        renderStatus("Error", msg.statusText);
+                        rendered = renderStatus("Error", msg.statusText);
                     break;
                 case TFTState::TrayDashboard:
-                    _dashboard.render(&_sprite, msg.dashboardState, _blitOx, _blitOy);
+                    rendered = renderTrayDashboard(msg.dashboardState);
                     break;
             }
             // Commit state only after a successful (guarded) render, so the idle
             // status-bar refresh never paints a header over a screen that failed
-            // to render (dropped frame on a lock timeout).
-            _currentState = msg.state;
-            _lastStatusRefreshMs = millis();
+            // to render (frame dropped on a lock timeout or strip alloc failure).
+            if (rendered) {
+                _currentState = msg.state;
+                _lastStatusRefreshMs = millis();
+            }
         }
     }
 
@@ -421,119 +434,142 @@ void TFTManager::processQueue() {
 // Rendering
 // ---------------------------------------------------------------------------
 
-void TFTManager::blitCanvas() {
-    // On wide panels clear the gutters around the centered 240x240 canvas so a
-    // prior full-screen landscape frame doesn't linger behind legacy views.
-    // (Runs inside processQueue's shared-SPI guard; no-op on 240x240 panels.)
-    if (_wide) {
-        const int W = _tft.width(), H = _tft.height();
-        if (_blitOx > 0) {
-            _tft.fillRect(0, 0, _blitOx, H, COLOR_BG);
-            _tft.fillRect(_blitOx + 240, 0, W - _blitOx - 240, H, COLOR_BG);
-        }
-        if (_blitOy > 0) {
-            _tft.fillRect(_blitOx, 0, 240, _blitOy, COLOR_BG);
-            _tft.fillRect(_blitOx, _blitOy + 240, 240, H - _blitOy - 240, COLOR_BG);
-        }
+// On wide panels clear the gutters around the centered 240x240 area so a
+// prior full-screen landscape frame doesn't linger behind legacy views.
+// (Runs inside processQueue's shared-SPI guard; no-op on 240x240 panels.)
+void TFTManager::clearWideGutters() {
+    if (!_wide) return;
+    const int W = _tft.width(), H = _tft.height();
+    if (_blitOx > 0) {
+        _tft.fillRect(0, 0, _blitOx, H, COLOR_BG);
+        _tft.fillRect(_blitOx + 240, 0, W - _blitOx - 240, H, COLOR_BG);
     }
+    if (_blitOy > 0) {
+        _tft.fillRect(_blitOx, 0, 240, _blitOy, COLOR_BG);
+        _tft.fillRect(_blitOx, _blitOy + 240, 240, H - _blitOy - 240, COLOR_BG);
+    }
+}
+
+void TFTManager::blitCanvas() {
+    clearWideGutters();
     // 240x240 sprite pushed at the panel-aware origin: (0,0) on 240x240 panels,
     // centered on wide panels (ILI9488).
     _sprite.pushSprite(_blitOx, _blitOy);
 }
 
-void TFTManager::renderBoot(const char* version) {
-    _sprite.fillScreen(COLOR_BG);
+// Shared 240x240 backend — same shape as renderLandscapeFrame: persistent full
+// sprite when one exists, otherwise the transient 240x32 16-bit strip drawn
+// band-by-band (bands overhanging 240 rows clip at the panel edge).
+template <typename DrawFn>
+bool TFTManager::render240Frame(DrawFn&& drawBody) {
+    if (_fullFrame) {
+        _sprite.fillScreen(COLOR_BG);
+        drawBody(_sprite, 0);
+        blitCanvas();
+        return true;
+    }
 
-    // Centered logo text
-    _sprite.setTextColor(COLOR_ACCENT);
-    _sprite.setTextSize(3);
-    _sprite.setTextDatum(MC_DATUM);
-    _sprite.drawString("SpoolSense", _sprite.width() / 2, _sprite.height() / 2 - 20);
-
-    _sprite.setTextColor(COLOR_SUBTEXT);
-    _sprite.setTextSize(1);
-    _sprite.drawString(version, _sprite.width() / 2, _sprite.height() / 2 + 20);
-
-    blitCanvas();
+    const int STRIP_H = 32;
+    _strip.setColorDepth(16);
+    if (!_strip.createSprite(240, STRIP_H)) {
+        Serial.println("TFT: 240 strip alloc failed");
+        return false;
+    }
+    clearWideGutters();
+    for (int bandY = 0; bandY < 240; bandY += STRIP_H) {
+        _strip.fillScreen(COLOR_BG);
+        drawBody(_strip, bandY);
+        _strip.pushSprite(_blitOx, _blitOy + bandY);
+    }
+    _strip.deleteSprite();
+    return true;
 }
 
-void TFTManager::renderReady() {
-    _sprite.fillScreen(COLOR_BG);
+bool TFTManager::renderBoot(const char* version) {
+    return render240Frame([&](LGFX_Sprite& c, int y) { drawBoot240(c, y, version); });
+}
 
-    // Header bar
-    _sprite.fillRect(0, 0, _sprite.width(), 28, COLOR_HEADER_BG);
-    _sprite.setTextColor(COLOR_ACCENT);
-    _sprite.setTextSize(1);
-    _sprite.setTextDatum(MC_DATUM);
-    _sprite.drawString("SpoolSense", _sprite.width() / 2, 14);
-    drawWifiIcon240();
+void TFTManager::drawBoot240(LGFX_Sprite& canvas, int yOffset, const char* version) {
+    const int W = 240, H = 240;
+    auto Y = [&](int y){ return y - yOffset; };
+
+    canvas.setTextColor(COLOR_ACCENT);
+    canvas.setTextSize(3);
+    canvas.setTextDatum(MC_DATUM);
+    canvas.drawString("SpoolSense", W / 2, Y(H / 2 - 20));
+
+    canvas.setTextColor(COLOR_SUBTEXT);
+    canvas.setTextSize(1);
+    canvas.drawString(version, W / 2, Y(H / 2 + 20));
+}
+
+bool TFTManager::renderReady() {
+    return render240Frame([&](LGFX_Sprite& c, int y) { drawReady240(c, y); });
+}
+
+void TFTManager::drawReady240(LGFX_Sprite& canvas, int yOffset) {
+    const int W = 240, H = 240;
+    auto Y = [&](int y){ return y - yOffset; };
+
+    canvas.fillRect(0, Y(0), W, 28, COLOR_HEADER_BG);
+    canvas.setTextColor(COLOR_ACCENT);
+    canvas.setTextSize(1);
+    canvas.setTextDatum(MC_DATUM);
+    canvas.drawString("SpoolSense", W / 2, Y(14));
+    drawWifiIcon240(canvas, yOffset);
 
     // Idle spool graphic: grey fill indicates no spool selected (waiting for tag)
-    int cx = _sprite.width() / 2;
-    int cy = _sprite.height() / 2 + 10;
-    drawSpoolImage(_sprite, cx, cy, 0x888888, 0, 150);  // neutral grey idle spool
+    int cx = W / 2;
+    int cy = H / 2 + 10;
+    drawSpoolImage(canvas, cx, cy, 0x888888, yOffset, 150);
 
-    // Prompt
-    _sprite.setTextColor(COLOR_SUBTEXT);
-    _sprite.setTextSize(1);
-    _sprite.setTextDatum(MC_DATUM);
-    _sprite.drawString("Tap a spool to scan", cx, _sprite.height() - 16);
-
-    blitCanvas();
+    canvas.setTextColor(COLOR_SUBTEXT);
+    canvas.setTextSize(1);
+    canvas.setTextDatum(MC_DATUM);
+    canvas.drawString("Tap a spool to scan", cx, Y(H - 16));
 }
 
-void TFTManager::renderSpoolScanned(const DisplaySpoolData& spool) {
-    _sprite.fillScreen(COLOR_BG);
+bool TFTManager::renderSpoolScanned(const DisplaySpoolData& spool) {
+    return render240Frame([&](LGFX_Sprite& c, int y) { drawSpool240(c, y, spool); });
+}
 
-    int W = _sprite.width();   // 240
-    int H = _sprite.height();  // 240
+void TFTManager::drawSpool240(LGFX_Sprite& canvas, int yOffset, const DisplaySpoolData& spool) {
+    const int W = 240;
+    auto Y = [&](int y){ return y - yOffset; };
 
-    // Header bar
-    _sprite.fillRect(0, 0, W, 28, COLOR_HEADER_BG);
+    canvas.fillRect(0, Y(0), W, 28, COLOR_HEADER_BG);
+    drawTagIcon(canvas, spool.tagType, 4, Y(2));
+    canvas.setTextColor(COLOR_ACCENT);
+    canvas.setTextSize(1);
+    canvas.setTextDatum(MC_DATUM);
+    canvas.drawString("SpoolSense", W / 2, Y(14));
+    drawWifiIcon240(canvas, yOffset);
 
-    // Tag type icon top-left in header
-    drawTagIcon(spool.tagType, 4, 2);
-
-    // "SpoolSense" in header
-    _sprite.setTextColor(COLOR_ACCENT);
-    _sprite.setTextSize(1);
-    _sprite.setTextDatum(MC_DATUM);
-    _sprite.drawString("SpoolSense", _sprite.width() / 2, 14);
-    drawWifiIcon240();
-
-    // ---- Spool graphic ----
     uint32_t fillColor = hexToRgb(spool.colorHex);
     int cx = W / 2;
-    int cy = 110;
-    drawSpoolImage(_sprite, cx, cy, fillColor, 0, 150);
+    drawSpoolImage(canvas, cx, 110, fillColor, yOffset, 150);
 
-    // ---- Text area ----
     int textY = 190;
-    _sprite.setTextDatum(MC_DATUM);
+    canvas.setTextDatum(MC_DATUM);
 
-    // Brand + material
     char brandMat[48];
     snprintf(brandMat, sizeof(brandMat), "%s  %s", spool.brand, spool.material);
-    _sprite.setTextColor(COLOR_TEXT);
-    _sprite.setTextSize(1);
-    _sprite.drawString(brandMat, cx, textY);
+    canvas.setTextColor(COLOR_TEXT);
+    canvas.setTextSize(1);
+    canvas.drawString(brandMat, cx, Y(textY));
 
-    // Weight bar
     if (spool.totalWeight > 0) {
-        drawWeightBar(20, textY + 14, W - 40, 8,
+        drawWeightBar(canvas, 20, Y(textY + 14), W - 40, 8,
                       spool.remainingWeight, spool.totalWeight);
 
-        // Weight text
         char weightStr[32];
         snprintf(weightStr, sizeof(weightStr), "%.0fg / %.0fg",
                  spool.remainingWeight, spool.totalWeight);
-        _sprite.setTextColor(COLOR_SUBTEXT);
-        _sprite.setTextSize(1);
-        _sprite.setTextDatum(MC_DATUM);
-        _sprite.drawString(weightStr, cx, textY + 30);
+        canvas.setTextColor(COLOR_SUBTEXT);
+        canvas.setTextSize(1);
+        canvas.setTextDatum(MC_DATUM);
+        canvas.drawString(weightStr, cx, Y(textY + 30));
     }
-
-    blitCanvas();
 }
 
 // Tinted 3D spool image. For each luminance pixel: brightness gates how much of
@@ -583,13 +619,12 @@ void TFTManager::drawWifiBars(LGFX_Sprite& canvas, int x, int y, int rssi, bool 
     }
 }
 
-// Shared top bar: "SpoolSense" + WiFi/HA/Printer status. Status is queried live
-// (bool reads / WiFi calls are safe from the TFT task).
 // Same signal-bars indicator as the landscape status bar, sized for the
-// 240x240 header (top-right corner).
-void TFTManager::drawWifiIcon240() {
+// 240x240 header (top-right corner). WiFi status is queried live (safe from
+// the TFT task).
+void TFTManager::drawWifiIcon240(LGFX_Sprite& canvas, int yOffset) {
     bool up = (WiFi.status() == WL_CONNECTED);
-    drawWifiBars(_sprite, _sprite.width() - 26, 22, up ? (int)WiFi.RSSI() : -127, up);
+    drawWifiBars(canvas, 240 - 26, 22 - yOffset, up ? (int)WiFi.RSSI() : -127, up);
 }
 
 void TFTManager::drawStatusBar(LGFX_Sprite& canvas, int yOffset) {
@@ -695,7 +730,8 @@ void TFTManager::drawLandscapeReady(LGFX_Sprite& canvas, int yOffset) {
 
 // Shared landscape backend: PSRAM -> one full 480x320 16-bit sprite; no-PSRAM ->
 // a reused 32-row RGB565 strip drawn band-by-band. spool==nullptr renders idle.
-void TFTManager::renderLandscapeFrame(const DisplaySpoolData* spool) {
+// Returns false if the frame was dropped because no sprite could be allocated.
+bool TFTManager::renderLandscapeFrame(const DisplaySpoolData* spool) {
     const int W = 480, H = 320;
 
     if (psramFound()) {
@@ -709,34 +745,34 @@ void TFTManager::renderLandscapeFrame(const DisplaySpoolData* spool) {
             else       drawLandscapeReady(full, 0);
             full.pushSprite(0, 0);
             full.deleteSprite();
-            return;
+            return true;
         }
         Serial.println("TFT: PSRAM landscape sprite failed, using strips");
     }
 
     const int STRIP_H = 32;
-    LGFX_Sprite strip(&_tft);
-    strip.setColorDepth(16);
-    if (!strip.createSprite(W, STRIP_H)) {
+    _strip.setColorDepth(16);
+    if (!_strip.createSprite(W, STRIP_H)) {
         Serial.println("TFT: landscape strip alloc failed");
-        return;
+        return false;
     }
     for (int bandY = 0; bandY < H; bandY += STRIP_H) {
-        strip.fillScreen(COLOR_BG);
-        drawStatusBar(strip, bandY);
-        if (spool) drawLandscapeSpool(strip, bandY, *spool);
-        else       drawLandscapeReady(strip, bandY);
-        strip.pushSprite(0, bandY);
+        _strip.fillScreen(COLOR_BG);
+        drawStatusBar(_strip, bandY);
+        if (spool) drawLandscapeSpool(_strip, bandY, *spool);
+        else       drawLandscapeReady(_strip, bandY);
+        _strip.pushSprite(0, bandY);
     }
-    strip.deleteSprite();
+    _strip.deleteSprite();
+    return true;
 }
 
-void TFTManager::renderSpoolScannedLandscape(const DisplaySpoolData& spool) {
-    renderLandscapeFrame(&spool);
+bool TFTManager::renderSpoolScannedLandscape(const DisplaySpoolData& spool) {
+    return renderLandscapeFrame(&spool);
 }
 
-void TFTManager::renderReadyLandscape() {
-    renderLandscapeFrame(nullptr);
+bool TFTManager::renderReadyLandscape() {
+    return renderLandscapeFrame(nullptr);
 }
 
 // Centered status text body (scan-progress / write-result screens), FreeFonts.
@@ -760,7 +796,7 @@ void TFTManager::drawLandscapeText(LGFX_Sprite& canvas, int yOffset,
     }
 }
 
-void TFTManager::renderTextLandscape(const char* l1, const char* l2, uint32_t l1Color) {
+bool TFTManager::renderTextLandscape(const char* l1, const char* l2, uint32_t l1Color) {
     const int W = 480, H = 320;
     if (psramFound()) {
         LGFX_Sprite full(&_tft);
@@ -772,21 +808,24 @@ void TFTManager::renderTextLandscape(const char* l1, const char* l2, uint32_t l1
             drawLandscapeText(full, 0, l1, l2, l1Color);
             full.pushSprite(0, 0);
             full.deleteSprite();
-            return;
+            return true;
         }
         Serial.println("TFT: PSRAM text sprite failed, using strips");
     }
     const int STRIP_H = 32;
-    LGFX_Sprite strip(&_tft);
-    strip.setColorDepth(16);
-    if (!strip.createSprite(W, STRIP_H)) return;
-    for (int bandY = 0; bandY < H; bandY += STRIP_H) {
-        strip.fillScreen(COLOR_BG);
-        drawStatusBar(strip, bandY);
-        drawLandscapeText(strip, bandY, l1, l2, l1Color);
-        strip.pushSprite(0, bandY);
+    _strip.setColorDepth(16);
+    if (!_strip.createSprite(W, STRIP_H)) {
+        Serial.println("TFT: landscape text strip alloc failed");
+        return false;
     }
-    strip.deleteSprite();
+    for (int bandY = 0; bandY < H; bandY += STRIP_H) {
+        _strip.fillScreen(COLOR_BG);
+        drawStatusBar(_strip, bandY);
+        drawLandscapeText(_strip, bandY, l1, l2, l1Color);
+        _strip.pushSprite(0, bandY);
+    }
+    _strip.deleteSprite();
+    return true;
 }
 
 // Repaint only the top status band (cheap, ~24KB strip) so idle status stays
@@ -799,103 +838,105 @@ void TFTManager::refreshStatusBar() {
     SharedSPIBus::Guard g;
     if (!g) return;
     LandscapeLayout L = landscapeLayout(480, 320);
-    LGFX_Sprite bar(&_tft);
-    bar.setColorDepth(16);
-    if (!bar.createSprite(480, L.headerH)) return;
-    bar.fillScreen(COLOR_BG);
-    drawStatusBar(bar, 0);
-    bar.pushSprite(0, 0);
-    bar.deleteSprite();
+    _strip.setColorDepth(16);
+    if (!_strip.createSprite(480, L.headerH)) return;
+    _strip.fillScreen(COLOR_BG);
+    drawStatusBar(_strip, 0);
+    _strip.pushSprite(0, 0);
+    _strip.deleteSprite();
 }
 
-void TFTManager::renderStatus(const char* line1, const char* line2) {
-    _sprite.fillScreen(COLOR_BG);
+bool TFTManager::renderStatus(const char* line1, const char* line2) {
+    return render240Frame([&](LGFX_Sprite& c, int y) { drawStatus240(c, y, line1, line2); });
+}
 
-    _sprite.fillRect(0, 0, _sprite.width(), 28, COLOR_HEADER_BG);
-    _sprite.setTextColor(COLOR_ACCENT);
-    _sprite.setTextSize(1);
-    _sprite.setTextDatum(MC_DATUM);
-    _sprite.drawString("SpoolSense", _sprite.width() / 2, 14);
-    drawWifiIcon240();
+void TFTManager::drawStatus240(LGFX_Sprite& canvas, int yOffset,
+                               const char* line1, const char* line2) {
+    const int W = 240, H = 240;
+    auto Y = [&](int y){ return y - yOffset; };
 
-    int cy = _sprite.height() / 2;
-    _sprite.setTextColor(COLOR_TEXT);
-    _sprite.setTextSize(2);
-    _sprite.setTextDatum(MC_DATUM);
-    _sprite.drawString(line1, _sprite.width() / 2, line2 ? cy - 12 : cy);
+    canvas.fillRect(0, Y(0), W, 28, COLOR_HEADER_BG);
+    canvas.setTextColor(COLOR_ACCENT);
+    canvas.setTextSize(1);
+    canvas.setTextDatum(MC_DATUM);
+    canvas.drawString("SpoolSense", W / 2, Y(14));
+    drawWifiIcon240(canvas, yOffset);
+
+    int cy = H / 2;
+    canvas.setTextColor(COLOR_TEXT);
+    canvas.setTextSize(2);
+    canvas.setTextDatum(MC_DATUM);
+    canvas.drawString(line1, W / 2, Y(line2 ? cy - 12 : cy));
 
     if (line2) {
-        _sprite.setTextColor(COLOR_SUBTEXT);
-        _sprite.setTextSize(1);
-        _sprite.drawString(line2, _sprite.width() / 2, cy + 12);
+        canvas.setTextColor(COLOR_SUBTEXT);
+        canvas.setTextSize(1);
+        canvas.drawString(line2, W / 2, Y(cy + 12));
     }
-
-    blitCanvas();
 }
 
-void TFTManager::renderWriteResult(bool success, const char* tagFormat) {
-    _sprite.fillScreen(COLOR_BG);
-    _sprite.fillRect(0, 0, _sprite.width(), 28, COLOR_HEADER_BG);
-    _sprite.setTextColor(COLOR_ACCENT);
-    _sprite.setTextSize(1);
-    _sprite.setTextDatum(MC_DATUM);
-    _sprite.drawString("SpoolSense", _sprite.width() / 2, 14);
-    drawWifiIcon240();
-
-    int cx = _sprite.width() / 2;
-    int cy = _sprite.height() / 2;
-
-    if (success) {
-        // Green checkmark circle
-        _sprite.fillCircle(cx, cy - 20, 22, 0x00CC66);
-        _sprite.setTextColor(COLOR_BG);
-        _sprite.setTextSize(3);
-        _sprite.setTextDatum(MC_DATUM);
-        _sprite.drawString("OK", cx, cy - 20);
-        _sprite.setTextColor(COLOR_TEXT);
-        _sprite.setTextSize(1);
-        _sprite.drawString("Write OK", cx, cy + 12);
-        _sprite.setTextColor(COLOR_SUBTEXT);
-        _sprite.drawString(tagFormat, cx, cy + 26);
-    } else {
-        _sprite.fillCircle(cx, cy - 20, 22, 0xFF4444);
-        _sprite.setTextColor(COLOR_BG);
-        _sprite.setTextSize(3);
-        _sprite.setTextDatum(MC_DATUM);
-        _sprite.drawString("X", cx, cy - 20);
-        _sprite.setTextColor(COLOR_TEXT);
-        _sprite.setTextSize(1);
-        _sprite.drawString("Write failed", cx, cy + 12);
-        _sprite.setTextColor(COLOR_SUBTEXT);
-        _sprite.drawString(tagFormat, cx, cy + 26);
-    }
-
-    blitCanvas();
+bool TFTManager::renderWriteResult(bool success, const char* tagFormat) {
+    return render240Frame([&](LGFX_Sprite& c, int y) { drawWriteResult240(c, y, success, tagFormat); });
 }
 
-void TFTManager::renderKeypadEntry(const char* toolNumber) {
-    _sprite.fillScreen(COLOR_BG);
-    _sprite.fillRect(0, 0, _sprite.width(), 28, COLOR_HEADER_BG);
-    _sprite.setTextColor(COLOR_ACCENT);
-    _sprite.setTextSize(1);
-    _sprite.setTextDatum(MC_DATUM);
-    _sprite.drawString("SpoolSense", _sprite.width() / 2, 14);
-    drawWifiIcon240();
+void TFTManager::drawWriteResult240(LGFX_Sprite& canvas, int yOffset,
+                                    bool success, const char* tagFormat) {
+    const int W = 240, H = 240;
+    auto Y = [&](int y){ return y - yOffset; };
 
-    int cx = _sprite.width() / 2;
-    _sprite.setTextColor(COLOR_SUBTEXT);
-    _sprite.setTextSize(1);
-    _sprite.drawString("Assign to tool:", cx, 100);
+    canvas.fillRect(0, Y(0), W, 28, COLOR_HEADER_BG);
+    canvas.setTextColor(COLOR_ACCENT);
+    canvas.setTextSize(1);
+    canvas.setTextDatum(MC_DATUM);
+    canvas.drawString("SpoolSense", W / 2, Y(14));
+    drawWifiIcon240(canvas, yOffset);
 
-    _sprite.setTextColor(COLOR_TEXT);
-    _sprite.setTextSize(4);
-    _sprite.drawString(toolNumber, cx, 130);
+    int cx = W / 2;
+    int cy = H / 2;
 
-    _sprite.setTextColor(COLOR_SUBTEXT);
-    _sprite.setTextSize(1);
-    _sprite.drawString("Press # to confirm", cx, 185);
+    canvas.fillCircle(cx, Y(cy - 20), 22, success ? 0x00CC66 : 0xFF4444);
+    canvas.setTextColor(COLOR_BG);
+    canvas.setTextSize(3);
+    canvas.setTextDatum(MC_DATUM);
+    canvas.drawString(success ? "OK" : "X", cx, Y(cy - 20));
+    canvas.setTextColor(COLOR_TEXT);
+    canvas.setTextSize(1);
+    canvas.drawString(success ? "Write OK" : "Write failed", cx, Y(cy + 12));
+    canvas.setTextColor(COLOR_SUBTEXT);
+    canvas.drawString(tagFormat, cx, Y(cy + 26));
+}
 
-    blitCanvas();
+bool TFTManager::renderKeypadEntry(const char* toolNumber) {
+    return render240Frame([&](LGFX_Sprite& c, int y) { drawKeypad240(c, y, toolNumber); });
+}
+
+void TFTManager::drawKeypad240(LGFX_Sprite& canvas, int yOffset, const char* toolNumber) {
+    const int W = 240;
+    auto Y = [&](int y){ return y - yOffset; };
+
+    canvas.fillRect(0, Y(0), W, 28, COLOR_HEADER_BG);
+    canvas.setTextColor(COLOR_ACCENT);
+    canvas.setTextSize(1);
+    canvas.setTextDatum(MC_DATUM);
+    canvas.drawString("SpoolSense", W / 2, Y(14));
+    drawWifiIcon240(canvas, yOffset);
+
+    int cx = W / 2;
+    canvas.setTextColor(COLOR_SUBTEXT);
+    canvas.setTextSize(1);
+    canvas.drawString("Assign to tool:", cx, Y(100));
+
+    canvas.setTextColor(COLOR_TEXT);
+    canvas.setTextSize(4);
+    canvas.drawString(toolNumber, cx, Y(130));
+
+    canvas.setTextColor(COLOR_SUBTEXT);
+    canvas.setTextSize(1);
+    canvas.drawString("Press # to confirm", cx, Y(185));
+}
+
+bool TFTManager::renderTrayDashboard(const TrayDashboardState& state) {
+    return render240Frame([&](LGFX_Sprite& c, int y) { _dashboard.draw(c, y, state); });
 }
 
 // ---------------------------------------------------------------------------
@@ -903,7 +944,7 @@ void TFTManager::renderKeypadEntry(const char* toolNumber) {
 // ---------------------------------------------------------------------------
 
 
-void TFTManager::drawWeightBar(int x, int y, int w, int h,
+void TFTManager::drawWeightBar(LGFX_Sprite& canvas, int x, int y, int w, int h,
                                 float remaining, float total) {
     float ratio = (total > 0) ? (remaining / total) : 0.0f;
     ratio = constrain(ratio, 0.0f, 1.0f);
@@ -912,17 +953,14 @@ void TFTManager::drawWeightBar(int x, int y, int w, int h,
     // Red bar when ≤10% remaining (visual alert for respool soon)
     uint32_t barColor = (ratio <= 0.1f) ? COLOR_BAR_LOW : COLOR_BAR_FG;
 
-    // Background tray
-    _sprite.fillRoundRect(x, y, w, h, h / 2, COLOR_BAR_BG);
-    // Filled portion (green or red)
+    canvas.fillRoundRect(x, y, w, h, h / 2, COLOR_BAR_BG);
     if (filled > 0) {
-        _sprite.fillRoundRect(x, y, filled, h, h / 2, barColor);
+        canvas.fillRoundRect(x, y, filled, h, h / 2, barColor);
     }
-    // Outline for definition
-    _sprite.drawRoundRect(x, y, w, h, h / 2, 0x555555);
+    canvas.drawRoundRect(x, y, w, h, h / 2, 0x555555);
 }
 
-void TFTManager::drawTagIcon(uint8_t tagType, int x, int y) {
+void TFTManager::drawTagIcon(LGFX_Sprite& canvas, uint8_t tagType, int x, int y) {
     const char* label = nullptr;
     uint32_t color = COLOR_SUBTEXT;
 
@@ -956,10 +994,10 @@ void TFTManager::drawTagIcon(uint8_t tagType, int x, int y) {
             return;  // unknown type; skip label
     }
 
-    _sprite.setTextColor(color);
-    _sprite.setTextSize(1);
-    _sprite.setTextDatum(TR_DATUM);  // top-right aligned
-    _sprite.drawString(label, x + 22, y);
+    canvas.setTextColor(color);
+    canvas.setTextSize(1);
+    canvas.setTextDatum(TR_DATUM);  // top-right aligned
+    canvas.drawString(label, x + 22, y);
 }
 
 uint32_t TFTManager::hexToRgb(const char* hex) {
@@ -1050,15 +1088,37 @@ void TFTManager::showSpool(const DisplaySpoolData& spool) {
 void TFTManager::freeForOTA() {
     // Stop TFT task before OTA: queue messages from main task would race with direct
     // frame buffer writes. OTA may reboot (success) or hang (failure); sprite not restored.
+    // Cooperative stop: ask the task to park at its clean point, then delete
+    // it there. Deleting it mid-frame would strand whatever it held — the
+    // shared-SPI mutex (dead OTA screen + dead NFC on shared-bus boards) and
+    // any transient sprite — because vTaskDelete does not unwind the stack.
+    // NFC is already paused, so the task cannot block on the bus for long;
+    // the bound comfortably exceeds the guard's own acquire timeout.
     if (_taskHandle != nullptr) {
+        _stopRequested = true;
+        for (int i = 0; i < 500 && eTaskGetState(_taskHandle) != eSuspended; ++i) {
+            vTaskDelay(pdMS_TO_TICKS(10));
+        }
+        if (eTaskGetState(_taskHandle) != eSuspended) {
+            Serial.println("TFTManager: render task did not park; deleting anyway");
+        } else {
+            Serial.println("TFTManager: Task stopped for OTA");
+        }
         vTaskDelete(_taskHandle);
         _taskHandle = nullptr;
-        Serial.println("TFTManager: Task stopped for OTA");
     }
 
-    // Delete sprite to recover 57.6KB heap for OTA SSL/HTTPS buffer (16-bit color on 240x240)
-    _sprite.deleteSprite();
-    Serial.printf("TFTManager: Sprite freed, heap now %u\n", ESP.getFreeHeap());
+    // Reclaim the transient strip in case the task had to be deleted without
+    // parking (safe no-op when it holds no buffer).
+    _strip.deleteSprite();
+
+    // Release the persistent framebuffer for the OTA TLS/HTTPS buffers (#59).
+    // Strip-rendering boards hold no framebuffer between frames.
+    if (_fullFrame) {
+        _sprite.deleteSprite();
+        _fullFrame = false;
+        Serial.printf("TFTManager: Sprite freed, heap now %u\n", ESP.getFreeHeap());
+    }
 
     SharedSPIBus::Guard busGuard;
     if (!busGuard) {

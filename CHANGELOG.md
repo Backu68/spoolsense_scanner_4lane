@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.10.0] - 2026-08-07
+
+Major memory recovery for boards without PSRAM using a TFT display. No
+configuration changes; upgrade over OTA as usual.
+
+### Fixed
+
+- **Out-of-memory on ESP32-WROOM and other no-PSRAM boards with the TFT enabled** — the display held a permanent 57.6 KB framebuffer in internal RAM, the firmware's largest single allocation, leaving as little as 7 KB free once WiFi, Spoolman sync, and the web UI were running together; the scanner crashed within minutes and disabling the display was the only workaround. Frames now render through a 15.4 KB strip that exists only while drawing, returning the full 57.6 KB between frames. Field-validated on a WROOM + PN5180 + TFT setup: internal free RAM with the display on went from 13 KB to 74 KB. (#287)
+- **A firmware update can no longer strand the display task's resources** — OTA stopped the render task with a hard kill that could land mid-frame and leave the shared SPI bus locked: a blank update screen, and on ESP32-C5/C6 a dead NFC reader after a failed update. The render task now parks at a safe point before the update proceeds.
+
+### Changed
+
+- **240x240 and 320x240 displays (ST7789, GC9A01, ILI9341) on no-PSRAM boards upgrade from 256-colour to full 16-bit colour** — removes the banding on the tinted spool graphic. Boards with PSRAM keep their existing full-framebuffer rendering, unchanged.
+
 ## [1.9.3] - 2026-08-06
 
 ### Fixed
