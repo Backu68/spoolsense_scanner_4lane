@@ -9,7 +9,9 @@ class FourLanePN532Manager {
 public:
     static constexpr uint8_t LANE_COUNT = 4;
 
-    // ESP32-WROOM wiring for the BoxTurtle 4-lane prototype.
+    // ESP32 4-lane BoxTurtle prototype wiring.
+    // GPIO16/17 are deliberately avoided because some ESP32 modules reserve
+    // them for PSRAM; using them as CS can prevent the board from running.
     static constexpr uint8_t PIN_RST  = 13;
     static constexpr uint8_t PIN_SCK  = 25;
     static constexpr uint8_t PIN_MISO = 26;
@@ -30,7 +32,9 @@ private:
         uint8_t absentMisses = 0;
     };
 
-    static constexpr uint8_t CS_PINS[LANE_COUNT] = {14, 16, 17, 18};
+    // Per-reader chip-select lines. 32/33 are unused by PN532 mode and avoid
+    // the GPIO16/17 PSRAM collision seen on the bench ESP32 module.
+    static constexpr uint8_t CS_PINS[LANE_COUNT] = {14, 18, 32, 33};
     static constexpr uint8_t REMOVE_MISS_THRESHOLD = 3;
 
     LaneState lanes_[LANE_COUNT];
