@@ -3,7 +3,7 @@
 #if defined(SPOOLSENSE_4LANE_PN532)
 
 #include <Arduino.h>
-#include "HardwareNFCConnectionPN532.h"
+#include <Adafruit_PN532.h>
 
 class FourLanePN532Manager {
 public:
@@ -22,7 +22,7 @@ public:
 
 private:
     struct LaneState {
-        HardwareNFCConnectionPN532* reader = nullptr;
+        Adafruit_PN532* reader = nullptr;
         bool ready = false;
         bool present = false;
         uint8_t uid[10] = {0};
