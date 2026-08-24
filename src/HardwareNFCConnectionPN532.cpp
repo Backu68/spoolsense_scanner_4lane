@@ -3,6 +3,9 @@
 #include "openprinttag_adafruit_pn532.h"
 #include "BoardPins.h"
 #include "SharedSPIBus.h"
+#ifdef SPOOLSENSE_4LANE_PN532
+#include "FourLanePN532Manager.h"
+#endif
 
 #include <Arduino.h>
 #include <SPI.h>
@@ -32,6 +35,22 @@ HardwareNFCConnectionPN532::~HardwareNFCConnectionPN532() {
 }
 
 bool HardwareNFCConnectionPN532::begin() {
+#ifdef SPOOLSENSE_4LANE_PN532
+    // In the dedicated four-lane build, the default PN532 object created by
+    // stock SpoolSense acts only as a bootstrap shim. It starts the real
+    // four-reader manager, then reports itself ready so the stock NFC task can
+    // idle without touching SPI. Fixed-pin instances are the actual lane
+    // readers and continue through the normal initialization path below.
+    if (!fixedPins_) {
+        Serial.println("PN532: four-lane bootstrap mode");
+        ready_ = FourLanePN532Manager::getInstance().begin();
+        if (ready_) {
+            FourLanePN532Manager::getInstance().startTask();
+        }
+        return ready_;
+    }
+#endif
+
     // Runtime pin overrides (#201) remain the stock behavior. 4-lane builds
     // can instead construct each PN532 with fixed pins so several readers can
     // share SCK/MOSI/MISO while using independent chip-select lines.
@@ -125,6 +144,12 @@ void HardwareNFCConnectionPN532::reset() {
 }
 
 bool HardwareNFCConnectionPN532::hardwareReset() {
+#ifdef SPOOLSENSE_4LANE_PN532
+    // The bootstrap shim owns no physical PN532. Do not let the stock recovery
+    // path pulse the shared reset line underneath the four-lane scan task.
+    if (!fixedPins_ && pn532_ == nullptr) return ready_;
+#endif
+
     SharedSPIBus::Guard spiGuard;
     if (!spiGuard) {
         Serial.println("PN532: shared SPI lock timeout during hardware reset");
@@ -272,12 +297,17 @@ bool HardwareNFCConnectionPN532::writeISO14443Pages(
 }
 
 void HardwareNFCConnectionPN532::getReaderInfo(char* buf, size_t len) const {
-    if (buf && len > 0) {
-        if (!ready_) {
-            snprintf(buf, len, "PN532 (not initialized)");
-        } else {
-            snprintf(buf, len, "PN532 v%d.%d", fwMajor_, fwMinor_);  // cached at init
-        }
+    if (!buf || len == 0) return;
+#ifdef SPOOLSENSE_4LANE_PN532
+    if (!fixedPins_ && ready_) {
+        snprintf(buf, len, "PN532 4-lane");
+        return;
+    }
+#endif
+    if (!ready_) {
+        snprintf(buf, len, "PN532 (not initialized)");
+    } else {
+        snprintf(buf, len, "PN532 v%d.%d", fwMajor_, fwMinor_);  // cached at init
     }
 }
 
@@ -293,6 +323,20 @@ bool HardwareNFCConnectionPN532::getDiagnosticSnapshot(ReaderDiagnostics& out) {
 }
 
 void HardwareNFCConnectionPN532::logDiagnostics() {
+#ifdef SPOOLSENSE_4LANE_PN532
+    if (!fixedPins_ && ready_) {
+        Serial.println("PN532: four-lane manager active (virtual scanner bootstrap)");
+        for (uint8_t lane = 0; lane < FourLanePN532Manager::LANE_COUNT; ++lane) {
+            Serial.printf("  Lane %u: reader=%s tag=%s uid=%s\n",
+                          lane + 1,
+                          FourLanePN532Manager::getInstance().isLaneReady(lane) ? "READY" : "FAILED",
+                          FourLanePN532Manager::getInstance().isLanePresent(lane) ? "PRESENT" : "EMPTY",
+                          FourLanePN532Manager::getInstance().getLaneUid(lane));
+        }
+        return;
+    }
+#endif
+
     if (!pn532_ || !ready_) {
         Serial.println("PN532: Not initialized");
         return;
