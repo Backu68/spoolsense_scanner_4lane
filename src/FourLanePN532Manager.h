@@ -3,6 +3,7 @@
 #ifdef SPOOLSENSE_4LANE_PN532
 
 #include <cstdint>
+#include <cstddef>
 #include "HardwareNFCConnectionPN532.h"
 
 #ifndef NATIVE_TEST
