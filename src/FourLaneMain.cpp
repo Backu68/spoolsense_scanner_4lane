@@ -14,7 +14,7 @@ void setup() {
     Serial.println();
     Serial.println("=== SpoolSense 4-Lane PN532 hardware bring-up ===");
     Serial.println("This build is intentionally serial-only; stock SpoolSense remains unchanged.");
-    Serial.println("Lane CS: L1=14 L2=16 L3=17 L4=18");
+    Serial.println("Lane CS: L1=14 L2=18 L3=32 L4=33");
 
     if (!fourLaneNfc.begin()) {
         Serial.println("FourLanePN532: no readers initialized; continuing for diagnostics");
