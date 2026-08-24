@@ -42,3 +42,13 @@ jobs:
         run: pio run -e ${{ matrix.env }}
       - name: Flash budget
         run: python scripts/check_flash_budget.py ${{ matrix.env }}
+      - name: Upload 4-lane flash binaries
+        if: matrix.env == 'esp32dev_4lane'
+        uses: actions/upload-artifact@v4
+        with:
+          name: spoolsense-4lane-esp32dev
+          path: |
+            .pio/build/esp32dev_4lane/bootloader.bin
+            .pio/build/esp32dev_4lane/partitions.bin
+            .pio/build/esp32dev_4lane/firmware.bin
+          if-no-files-found: error
