@@ -1,6 +1,7 @@
 #if defined(SPOOLSENSE_4LANE_PN532)
 
 #include "FourLanePN532Manager.h"
+#include <SPI.h>
 #include <cstring>
 
 constexpr uint8_t FourLanePN532Manager::CS_PINS[FourLanePN532Manager::LANE_COUNT];
@@ -10,33 +11,49 @@ bool FourLanePN532Manager::begin() {
     Serial.printf("  SPI SCK=%u MISO=%u MOSI=%u shared RST=%u\n",
                   PIN_SCK, PIN_MISO, PIN_MOSI, PIN_RST);
 
-    // Keep every reader deselected before the SPI bus is initialized. This is
-    // especially important when some lanes are physically absent during bench testing.
+    // All readers share the SPI data/clock lines. Every CS must be HIGH before
+    // the bus starts so only the explicitly selected PN532 can drive MISO.
     for (uint8_t i = 0; i < LANE_COUNT; ++i) {
         pinMode(CS_PINS[i], OUTPUT);
         digitalWrite(CS_PINS[i], HIGH);
     }
 
+    pinMode(PIN_RST, OUTPUT);
+    digitalWrite(PIN_RST, HIGH);
+    SPI.begin(PIN_SCK, PIN_MISO, PIN_MOSI);
+
     bool anyReady = false;
     for (uint8_t i = 0; i < LANE_COUNT; ++i) {
         Serial.printf("FourLanePN532: lane %u CS=%u init...\n", i + 1, CS_PINS[i]);
-        lanes_[i].reader = new HardwareNFCConnectionPN532(
-            PIN_RST, CS_PINS[i], PIN_SCK, PIN_MOSI, PIN_MISO);
+        lanes_[i].reader = new Adafruit_PN532(CS_PINS[i], &SPI);
 
         if (lanes_[i].reader == nullptr) {
             Serial.printf("FourLanePN532: lane %u allocation FAILED\n", i + 1);
             continue;
         }
 
-        lanes_[i].ready = lanes_[i].reader->begin();
-        if (!lanes_[i].ready) {
+        lanes_[i].reader->begin();
+        const uint32_t version = lanes_[i].reader->getFirmwareVersion();
+        if (version == 0) {
             Serial.printf("FourLanePN532: lane %u reader NOT FOUND\n", i + 1);
+            delete lanes_[i].reader;
+            lanes_[i].reader = nullptr;
             continue;
         }
 
-        char readerInfo[48] = {0};
-        lanes_[i].reader->getReaderInfo(readerInfo, sizeof(readerInfo));
-        Serial.printf("FourLanePN532: lane %u READY - %s\n", i + 1, readerInfo);
+        if (!lanes_[i].reader->SAMConfig()) {
+            Serial.printf("FourLanePN532: lane %u SAMConfig FAILED\n", i + 1);
+            delete lanes_[i].reader;
+            lanes_[i].reader = nullptr;
+            continue;
+        }
+
+        lanes_[i].ready = true;
+        const uint8_t ic = static_cast<uint8_t>(version >> 24);
+        const uint8_t major = static_cast<uint8_t>(version >> 16);
+        const uint8_t minor = static_cast<uint8_t>(version >> 8);
+        Serial.printf("FourLanePN532: lane %u READY - IC=0x%02X FW=%u.%u\n",
+                      i + 1, ic, major, minor);
         anyReady = true;
     }
 
@@ -46,9 +63,8 @@ bool FourLanePN532Manager::begin() {
 }
 
 void FourLanePN532Manager::poll() {
-    // Exactly one PN532 transaction chain per call. This keeps access strictly
-    // serialized because Adafruit_PN532 uses a file-scope packet buffer shared
-    // by every PN532 object.
+    // One reader per call, always sequential. Adafruit_PN532 has a shared
+    // file-scope packet buffer, so we deliberately never overlap operations.
     pollLane(nextLane_);
     nextLane_ = (nextLane_ + 1) % LANE_COUNT;
 }
@@ -64,7 +80,8 @@ void FourLanePN532Manager::pollLane(uint8_t laneIndex) {
 
     uint8_t uid[10] = {0};
     uint8_t uidLength = 0;
-    const bool found = lane.reader->detectTag(uid, &uidLength);
+    const bool found = lane.reader->readPassiveTargetID(
+        PN532_MIFARE_ISO14443A, uid, &uidLength, 100);
 
     if (found && uidLength > 0) {
         lane.absentMisses = 0;
