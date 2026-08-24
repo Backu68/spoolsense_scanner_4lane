@@ -3,6 +3,7 @@
 #include <Arduino.h>
 #include "FourLanePN532Manager.h"
 
+// Dedicated bring-up entry point for the 4-lane PN532 prototype.
 static FourLanePN532Manager fourLaneNfc;
 
 void setup() {
