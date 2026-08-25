@@ -18,7 +18,7 @@ public:
     bool queueState(uint8_t lane, const char* topic, const char* payload);
 
     bool isConfigured() const { return configured_; }
-    bool isConnected() const { return mqttClient_.connected(); }
+    bool isConnected() { return mqttClient_.connected(); }
 
 private:
     struct PendingState {
