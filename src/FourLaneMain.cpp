@@ -5,10 +5,12 @@
 #include <esp_mac.h>
 
 #include "FourLanePN532Manager.h"
+#include "FourLaneMqttPublisher.h"
 #include "TagStateJson.h"
 
 // Dedicated bring-up entry point for the 4-lane PN532 prototype.
 static FourLanePN532Manager fourLaneNfc;
+static FourLaneMqttPublisher fourLaneMqtt;
 static char baseDeviceId[7] = {0};
 
 static void makeBaseDeviceId() {
@@ -47,8 +49,11 @@ static void onLaneEvent(uint8_t lane, bool present, const uint8_t* uid, uint8_t 
         buildEmptyTagStateJson(payload, sizeof(payload));
     }
 
+    // Keep the serial representation visible while bringing up real MQTT.
     Serial.printf("VSCAN L%u MQTT TOPIC=%s\n", lane, topic);
     Serial.printf("VSCAN L%u MQTT PAYLOAD=%s\n", lane, payload);
+
+    fourLaneMqtt.queueState(lane, topic, payload);
 }
 
 void setup() {
@@ -59,14 +64,15 @@ void setup() {
     makeBaseDeviceId();
 
     Serial.println();
-    Serial.println("=== SpoolSense 4-Lane PN532 virtual-scanner bring-up ===");
-    Serial.println("Serial dry-run only: MQTT-shaped topics/payloads are not transmitted yet.");
+    Serial.println("=== SpoolSense 4-Lane PN532 virtual-scanner MQTT bring-up ===");
+    Serial.println("Uses stock SpoolSense Wi-Fi/MQTT settings from NVS; no credentials are compiled in.");
     Serial.println("Lane CS: L1=14 L2=18 L3=32 L4=33");
     Serial.printf("Base device ID: %s\n", baseDeviceId);
     for (uint8_t lane = 1; lane <= FourLanePN532Manager::LANE_COUNT; ++lane) {
         Serial.printf("Virtual scanner L%u: %s-L%u\n", lane, baseDeviceId, lane);
     }
 
+    fourLaneMqtt.begin(baseDeviceId);
     fourLaneNfc.setEventCallback(onLaneEvent);
 
     if (!fourLaneNfc.begin()) {
@@ -77,7 +83,9 @@ void setup() {
 }
 
 void loop() {
+    fourLaneMqtt.loop();
     fourLaneNfc.poll();
+    fourLaneMqtt.loop();
     delay(2);
 }
 
