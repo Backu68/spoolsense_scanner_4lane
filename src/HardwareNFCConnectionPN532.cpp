@@ -17,14 +17,23 @@ HardwareNFCConnectionPN532::HardwareNFCConnectionPN532() {
     memset(currentUid_, 0, sizeof(currentUid_));
 }
 
+HardwareNFCConnectionPN532::HardwareNFCConnectionPN532(
+    uint8_t rst, uint8_t ss, uint8_t sck, uint8_t mosi, uint8_t miso)
+    : useConfiguredPins_(false),
+      pinRst_(rst), pinSs_(ss), pinSck_(sck), pinMosi_(mosi), pinMiso_(miso) {
+    memset(&hal_, 0, sizeof(hal_));
+    memset(currentUid_, 0, sizeof(currentUid_));
+}
+
 HardwareNFCConnectionPN532::~HardwareNFCConnectionPN532() {
     delete pn532_;
 }
 
 bool HardwareNFCConnectionPN532::begin() {
-    // Runtime pin overrides (#201): PN532 shares the NFC pin slots (SS=NSS; BUSY unused).
-    // BOARD_SHARED_SPI injects the same global bus used by the TFT.
-    {
+    // Stock scanner behavior loads runtime pin overrides from ConfigurationManager.
+    // Explicit-pin instances are used by the 4-lane scheduler and retain their
+    // constructor-supplied SS/CS while sharing the same SPI signals.
+    if (useConfiguredPins_) {
         auto& cfg = ConfigurationManager::getInstance();
         pinRst_ = cfg.getNfcPin(NfcPinId::Rst);
         pinSs_  = cfg.getNfcPin(NfcPinId::Nss);
