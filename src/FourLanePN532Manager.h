@@ -8,6 +8,7 @@
 class FourLanePN532Manager {
 public:
     static constexpr uint8_t LANE_COUNT = 4;
+    using LaneEventCallback = void (*)(uint8_t lane, bool present, const uint8_t* uid, uint8_t uidLength);
 
     // ESP32 4-lane BoxTurtle prototype wiring.
     // GPIO16/17 are deliberately avoided because some ESP32 modules reserve
@@ -19,6 +20,7 @@ public:
 
     bool begin();
     void poll();
+    void setEventCallback(LaneEventCallback callback);
 
     bool isLaneReady(uint8_t lane) const;
 
@@ -39,6 +41,7 @@ private:
 
     LaneState lanes_[LANE_COUNT];
     uint8_t nextLane_ = 0;
+    LaneEventCallback eventCallback_ = nullptr;
 
     void pollLane(uint8_t laneIndex);
     static void printUid(const uint8_t* uid, uint8_t uidLength);
