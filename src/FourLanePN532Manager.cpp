@@ -69,6 +69,10 @@ void FourLanePN532Manager::poll() {
     nextLane_ = (nextLane_ + 1) % LANE_COUNT;
 }
 
+void FourLanePN532Manager::setEventCallback(LaneEventCallback callback) {
+    eventCallback_ = callback;
+}
+
 bool FourLanePN532Manager::isLaneReady(uint8_t lane) const {
     if (lane < 1 || lane > LANE_COUNT) return false;
     return lanes_[lane - 1].ready;
@@ -98,6 +102,10 @@ void FourLanePN532Manager::pollLane(uint8_t laneIndex) {
             Serial.printf("LANE %u TAG UID=", laneIndex + 1);
             printUid(uid, uidLength);
             Serial.println();
+
+            if (eventCallback_ != nullptr) {
+                eventCallback_(laneIndex + 1, true, uid, uidLength);
+            }
         }
         return;
     }
@@ -110,6 +118,10 @@ void FourLanePN532Manager::pollLane(uint8_t laneIndex) {
         lane.uidLength = 0;
         memset(lane.uid, 0, sizeof(lane.uid));
         Serial.printf("LANE %u TAG REMOVED\n", laneIndex + 1);
+
+        if (eventCallback_ != nullptr) {
+            eventCallback_(laneIndex + 1, false, nullptr, 0);
+        }
     }
 }
 
