@@ -12,6 +12,13 @@
 // ATQA and SAK extracted from bytes 9-10 and 11 respectively.
 extern byte pn532_packetbuffer[];
 
+#if defined(BOARD_TARANTULA_TFT)
+// Tarantula keeps all three peripherals electrically independent. LovyanGFX owns
+// VSPI for the ILI9341, touch is software SPI, and the PN532 gets the second
+// hardware controller (HSPI) on its dedicated 25/27/26 signal pins.
+static SPIClass tarantulaPn532Spi(HSPI);
+#endif
+
 HardwareNFCConnectionPN532::HardwareNFCConnectionPN532() {
     memset(&hal_, 0, sizeof(hal_));
     memset(currentUid_, 0, sizeof(currentUid_));
@@ -23,7 +30,8 @@ HardwareNFCConnectionPN532::~HardwareNFCConnectionPN532() {
 
 bool HardwareNFCConnectionPN532::begin() {
     // Runtime pin overrides (#201): PN532 shares the NFC pin slots (SS=NSS; BUSY unused).
-    // BOARD_SHARED_SPI injects the same global bus used by the TFT.
+    // BOARD_SHARED_SPI injects the same global bus used by the TFT. Tarantula is
+    // deliberately the opposite: its PN532 runs on a dedicated HSPI controller.
     {
         auto& cfg = ConfigurationManager::getInstance();
         pinRst_ = cfg.getNfcPin(NfcPinId::Rst);
@@ -32,7 +40,10 @@ bool HardwareNFCConnectionPN532::begin() {
         pinMosi_ = cfg.getNfcPin(NfcPinId::Mosi);
         pinMiso_ = cfg.getNfcPin(NfcPinId::Miso);
     }
-#if defined(BOARD_SHARED_SPI)
+#if defined(BOARD_TARANTULA_TFT)
+    tarantulaPn532Spi.begin(pinSck_, pinMiso_, pinMosi_, pinSs_);
+    SPIClass* spiBus = &tarantulaPn532Spi;
+#elif defined(BOARD_SHARED_SPI)
     if (!SharedSPIBus::begin(pinSck_, pinMiso_, pinMosi_, pinSs_, PIN_TFT_CS)) {
         Serial.println("PN532: shared SPI initialization failed");
         return false;
