@@ -307,6 +307,28 @@ bool ConfigurationManager::begin() {
     _keypadEnabled = false;
 #endif
 
+#if defined(BOARD_TARANTULA_TFT)
+    // This is a fixed physical station, not a generic WROOM wiring profile.
+    // Keep network/service settings configurable in NVS, but never allow stale
+    // generic hardware settings to select nonexistent peripherals or move the
+    // reader away from the bench-proven dedicated buses.
+    _lcdEnabled = false;
+    _ledEnabled = false;
+    _keypadEnabled = false;
+    _tftEnabled = true;
+
+    strncpy(_tftDriver, "ili9341", sizeof(_tftDriver) - 1);
+    _tftDriver[sizeof(_tftDriver) - 1] = '\0';
+    strncpy(_nfcReader, "pn532", sizeof(_nfcReader) - 1);
+    _nfcReader[sizeof(_nfcReader) - 1] = '\0';
+
+    _ledPin = LED_PIN_DEFAULT;
+    for (int i = 0; i < 6; i++) {
+        _nfcPins[i] = LED_PIN_DEFAULT;
+    }
+    Serial.println("ConfigurationManager: Tarantula fixed hardware profile applied");
+#endif
+
     _initialized = true;
     return true;
 }
