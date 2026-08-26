@@ -1,12 +1,18 @@
 #include <Arduino.h>
+#include <SPI.h>
+#include <Adafruit_PN532.h>
 #include "TFTConfig.h"
 #include "BoardPins.h"
 
 // Tarantula SpoolSense station hardware bring-up.
-// Stage 2 proves the ILI9341 plus XPT2046 touch. Touch is intentionally
-// bit-banged so it uses its own pins and shares no SPI signal pins with
-// either the TFT or PN532.
+// Proves three independent signal paths:
+//   ILI9341  -> VSPI 18/23/19
+//   XPT2046  -> software SPI 16/17/35 + CS13/IRQ34
+//   PN532    -> HSPI 25/27/26 + CS33/RST14
 static LGFX display(TFTDriver::ILI9341);
+static SPIClass nfcSPI(HSPI);
+static Adafruit_PN532 nfc(PIN_PN532_SS, &nfcSPI);
+static bool nfcReady = false;
 
 static uint8_t touchTransfer(uint8_t value) {
     uint8_t result = 0;
@@ -32,38 +38,65 @@ static uint16_t touchRead12(uint8_t command) {
 
 static bool readTouch(uint16_t& x, uint16_t& y) {
     if (digitalRead(PIN_TOUCH_IRQ) != LOW) return false;
-
-    // XPT2046: 0xD0 = X position, 0x90 = Y position, 12-bit differential.
     x = touchRead12(0xD0);
     y = touchRead12(0x90);
     return true;
+}
+
+static void showNfcStatus(const char* text, uint16_t color = TFT_WHITE) {
+    display.fillRect(18, 216, 210, 48, TFT_BLACK);
+    display.setTextColor(color, TFT_BLACK);
+    display.setCursor(18, 216);
+    display.print(text);
+    display.setTextColor(TFT_WHITE, TFT_BLACK);
+}
+
+static void initPn532() {
+    // Make the reader deterministic before starting HSPI.
+    pinMode(PIN_PN532_RST, OUTPUT);
+    digitalWrite(PIN_PN532_RST, LOW);
+    delay(20);
+    digitalWrite(PIN_PN532_RST, HIGH);
+    delay(100);
+
+    nfcSPI.begin(PIN_PN532_SCK, PIN_PN532_MISO, PIN_PN532_MOSI, PIN_PN532_SS);
+    nfc.begin();
+
+    uint32_t version = nfc.getFirmwareVersion();
+    if (!version) {
+        Serial.println("PN532 NOT FOUND");
+        showNfcStatus("PN532 FAIL", TFT_RED);
+        return;
+    }
+
+    Serial.printf("PN532 found: IC=0x%02X FW=%u.%u\n",
+                  (unsigned)((version >> 24) & 0xFF),
+                  (unsigned)((version >> 16) & 0xFF),
+                  (unsigned)((version >> 8) & 0xFF));
+    nfc.SAMConfig();
+    nfcReady = true;
+    showNfcStatus("PN532 READY", TFT_GREEN);
 }
 
 void setup() {
     delay(500);
     Serial.begin(115200);
     delay(250);
-    Serial.println("=== Tarantula ILI9341 + XPT2046 bring-up ===");
+    Serial.println("=== Tarantula full hardware bring-up ===");
 
     display.init();
     display.setRotation(0);
-
-    display.fillScreen(TFT_RED);
-    delay(200);
-    display.fillScreen(TFT_GREEN);
-    delay(200);
-    display.fillScreen(TFT_BLUE);
-    delay(200);
     display.fillScreen(TFT_BLACK);
-
     display.setTextColor(TFT_WHITE, TFT_BLACK);
     display.setTextSize(2);
-    display.setCursor(18, 56);
+    display.setCursor(18, 24);
     display.print("SpoolSense");
-    display.setCursor(18, 88);
+    display.setCursor(18, 56);
     display.print("ILI9341 OK");
+    display.setCursor(18, 88);
+    display.print("Touch OK");
     display.setCursor(18, 120);
-    display.print("Touch screen");
+    display.print("NFC test...");
 
     pinMode(PIN_TOUCH_SCLK, OUTPUT);
     pinMode(PIN_TOUCH_MOSI, OUTPUT);
@@ -74,32 +107,39 @@ void setup() {
     digitalWrite(PIN_TOUCH_MOSI, LOW);
     digitalWrite(PIN_TOUCH_CS, HIGH);
 
-    Serial.println("ILI9341 OK; XPT2046 test ready");
-    Serial.printf("Touch pins: CLK=%d DIN=%d DO=%d CS=%d IRQ=%d\n",
-                  PIN_TOUCH_SCLK, PIN_TOUCH_MOSI, PIN_TOUCH_MISO,
-                  PIN_TOUCH_CS, PIN_TOUCH_IRQ);
+    Serial.println("ILI9341 OK; XPT2046 OK");
+    initPn532();
 }
 
 void loop() {
-    static bool wasPressed = false;
-    static uint32_t lastReport = 0;
+    static uint32_t lastTouchReport = 0;
+    static uint32_t lastNfcScan = 0;
 
     uint16_t x = 0, y = 0;
-    bool pressed = readTouch(x, y);
-
-    if (pressed && (millis() - lastReport >= 75)) {
-        lastReport = millis();
+    if (readTouch(x, y) && millis() - lastTouchReport >= 100) {
+        lastTouchReport = millis();
         Serial.printf("TOUCH raw X=%u Y=%u\n", x, y);
-
-        display.fillRect(18, 156, 210, 48, TFT_BLACK);
-        display.setCursor(18, 156);
+        display.fillRect(18, 152, 210, 48, TFT_BLACK);
+        display.setCursor(18, 152);
         display.printf("X:%4u", x);
-        display.setCursor(18, 180);
+        display.setCursor(18, 176);
         display.printf("Y:%4u", y);
-        wasPressed = true;
-    } else if (!pressed && wasPressed) {
-        Serial.println("TOUCH released");
-        wasPressed = false;
+    }
+
+    if (nfcReady && millis() - lastNfcScan >= 150) {
+        lastNfcScan = millis();
+        uint8_t uid[7] = {0};
+        uint8_t uidLength = 0;
+        if (nfc.readPassiveTargetID(PN532_MIFARE_ISO14443A, uid, &uidLength, 50)) {
+            char uidText[24] = {0};
+            size_t pos = 0;
+            for (uint8_t i = 0; i < uidLength && pos + 3 < sizeof(uidText); ++i) {
+                pos += snprintf(uidText + pos, sizeof(uidText) - pos, "%02X", uid[i]);
+            }
+            Serial.printf("PN532 TAG UID=%s\n", uidText);
+            showNfcStatus(uidText, TFT_CYAN);
+            delay(250);
+        }
     }
 
     delay(5);
