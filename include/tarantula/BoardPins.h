@@ -51,7 +51,9 @@
 // Unused optional peripherals on this station
 #define PIN_LCD_SDA      -1
 #define PIN_LCD_SCL      -1
-#define PIN_STATUS_LED   -1
+// Stock config defaults the status LED feature on. Keep it assigned to an
+// otherwise-unused GPIO so first boot is harmless even with no LED connected.
+#define PIN_STATUS_LED   4
 #define PIN_KEYPAD_ROW1  -1
 #define PIN_KEYPAD_ROW2  -1
 #define PIN_KEYPAD_ROW3  -1
