@@ -104,17 +104,22 @@ void initWiFi() {
     lcdManager.updateScreen("Connecting WiFi", "");
   }
 
-  // Explicit STA init order matters on C3: disconnect(true) clears stale
-  // association state (BSSID/PMK from prior sessions), and modem-sleep must be
-  // configured before begin() or the initial 802.11 handshake runs with the
-  // default sleep mode. C3 SuperMini (Plus) boards fail to associate without this.
-  WiFi.disconnect(true);
+  // The DHCP hostname must be configured while WiFi is stopped. Arduino-ESP32
+  // requires setHostname() before mode()/begin(); otherwise mDNS may use the
+  // configured name while the DHCP lease still advertises the default hostname.
+  // WIFI_MODE_NULL also clears stale association state without calling
+  // disconnect() on an uninitialized interface.
+  WiFi.mode(WIFI_MODE_NULL);
   delay(100);
+  if (!WiFi.setHostname(config.getHostname())) {
+    Serial.printf("WiFi: Failed to set DHCP hostname '%s'\n", config.getHostname());
+  } else {
+    Serial.printf("WiFi: DHCP hostname set to '%s'\n", config.getHostname());
+  }
   WiFi.mode(WIFI_STA);
   // Keep-awake disables WIFI_PS_MIN_MODEM (Arduino default). Users on weak
   // networks report ~10 dB better RSSI with modem sleep off; costs idle current.
   WiFi.setSleep(!config.isWifiKeepAwakeEnabled());
-  WiFi.setHostname(config.getHostname());
   WiFi.begin(config.getWiFiSSID(), config.getWiFiPassword());
 
   // Status code every 3s so failures are diagnosable from serial:
