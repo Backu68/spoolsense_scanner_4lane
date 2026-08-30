@@ -217,9 +217,16 @@ public:
                 cfg.offset_x      = 0;
                 cfg.offset_y      = 0;
             }
+#if defined(BOARD_TARANTULA_TFT)
+            // Tarantula's 3.2" ILI9341 is mounted 90° counter-clockwise from
+            // the stock SpoolSense orientation. LovyanGFX rotation 3 = 270°
+            // clockwise, i.e. 90° counter-clockwise.
+            cfg.offset_rotation = (driver == TFTDriver::ILI9341) ? 3 : 0;
+#else
             // ILI9488 3.5" modules ship X-mirrored vs the ST7789 default and are
             // mounted landscape; rotation 5 = 90° + horizontal mirror-correct.
             cfg.offset_rotation = (driver == TFTDriver::ILI9488) ? 5 : 0;
+#endif
             cfg.dummy_read_pixel = 8;
             cfg.dummy_read_bits  = 1;
             cfg.readable     = false;
