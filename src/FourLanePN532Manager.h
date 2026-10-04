@@ -13,7 +13,6 @@ public:
     // ESP32 4-lane BoxTurtle prototype wiring.
     // GPIO16/17 are deliberately avoided because some ESP32 modules reserve
     // them for PSRAM; using them as CS can prevent the board from running.
-    static constexpr uint8_t PIN_RST  = 13;
     static constexpr uint8_t PIN_SCK  = 25;
     static constexpr uint8_t PIN_MISO = 26;
     static constexpr uint8_t PIN_MOSI = 27;
