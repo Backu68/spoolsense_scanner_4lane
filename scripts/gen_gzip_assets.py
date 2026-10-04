@@ -11,6 +11,10 @@ the result, and writes one generated header, src/gen/WebAssetsGz.h.
 The generated header is git-ignored and rewritten only when its content
 changes, so unchanged assets don't trigger a recompile.
 
+For fresh local checkouts, this hook also creates include/UserConfig.h from
+include/UserConfig.example.h if UserConfig.h does not yet exist. Existing local
+configuration is never overwritten.
+
 Can also be run standalone for inspection:  python3 scripts/gen_gzip_assets.py
 (reads the version from platformio.ini's -DFIRMWARE_VERSION flag).
 """
@@ -18,6 +22,7 @@ Can also be run standalone for inspection:  python3 scripts/gen_gzip_assets.py
 import gzip
 import os
 import re
+import shutil
 import sys
 
 # PlatformIO execs this via SCons without a __file__ binding; in that context
@@ -34,6 +39,25 @@ OUT_HEADER = os.path.join(GEN_DIR, "WebAssetsGz.h")
 # arrays are `static const uint8_t ... = { ... }` (already-compressed PNG/JPEG)
 # and don't match this pattern, so they're left alone.
 DECL_RE = re.compile(r"const\s+char\s+([A-Za-z_][A-Za-z0-9_]*)\s*\[\]\s*PROGMEM\s*=\s*")
+
+
+def ensure_user_config():
+    """Seed a fresh checkout with the stock example config, without ever
+    overwriting an existing local UserConfig.h."""
+    include_dir = os.path.join(PROJECT_DIR, "include")
+    target = os.path.join(include_dir, "UserConfig.h")
+    example = os.path.join(include_dir, "UserConfig.example.h")
+
+    if os.path.exists(target):
+        return False
+    if not os.path.exists(example):
+        raise FileNotFoundError(
+            "UserConfig.h is missing and UserConfig.example.h was not found"
+        )
+
+    shutil.copyfile(example, target)
+    print("user-config: created include/UserConfig.h from UserConfig.example.h")
+    return True
 
 
 def reconstruct_literal(text, start, version):
@@ -96,8 +120,6 @@ def render_header(assets, version):
         "",
     ]
     for name, gz in assets:
-        body = ",".join("0x%02x" % b for b in gz)
-        # 16 bytes per line for readability
         chunks = [",".join("0x%02x" % b for b in gz[i:i + 16])
                   for i in range(0, len(gz), 16)]
         arr = ",\n  ".join(chunks)
@@ -153,6 +175,8 @@ try:
     _UNDER_PLATFORMIO = True
 except NameError:
     _UNDER_PLATFORMIO = False
+
+ensure_user_config()
 
 if _UNDER_PLATFORMIO:
     generate(version_from_env(env))  # noqa: F821 — parse errors intentionally fail the build

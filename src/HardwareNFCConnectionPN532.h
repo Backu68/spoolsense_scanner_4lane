@@ -8,7 +8,13 @@
 // NFC connection using Adafruit PN532 hardware (ISO14443A only)
 class HardwareNFCConnectionPN532 : public NFCConnectionI {
 public:
+    // Stock behavior: pins are loaded from ConfigurationManager at begin().
     HardwareNFCConnectionPN532();
+
+    // 4-lane behavior: construct a reader with explicit pins. Multiple PN532s can
+    // share SCK/MOSI/MISO/RST while each reader gets its own SS/CS pin.
+    HardwareNFCConnectionPN532(uint8_t rst, uint8_t ss, uint8_t sck, uint8_t mosi, uint8_t miso);
+
     ~HardwareNFCConnectionPN532() override;
 
     bool begin() override;
@@ -33,7 +39,11 @@ public:
     bool getDiagnosticSnapshot(ReaderDiagnostics& out) override;
 
 private:
-    // Effective NFC pins from ConfigurationManager (#201); BUSY slot unused on PN532
+    // Stock instances load runtime overrides from ConfigurationManager. Explicit-pin
+    // instances keep the pins passed to the constructor (used by the 4-lane scheduler).
+    bool useConfiguredPins_ = true;
+
+    // Effective NFC pins; BUSY slot unused on PN532.
     uint8_t pinRst_ = 0, pinSs_ = 0, pinSck_ = 0, pinMosi_ = 0, pinMiso_ = 0;
     Adafruit_PN532* pn532_ = nullptr;
     opt_nfc_hal_t hal_;

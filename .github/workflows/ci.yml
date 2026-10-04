@@ -4,7 +4,7 @@ on:
   pull_request:
     branches: [dev, main]
   push:
-    branches: [dev]
+    branches: [dev, feature/4lane-pn532]
 
 jobs:
   native-tests:
@@ -21,7 +21,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        env: [esp32dev, esp32s3zero, esp32c3, esp32s3devkitc, esp32c6, esp32c5]
+        env: [esp32dev, esp32dev_4lane, esp32dev_4lane_full, esp32s3zero, esp32c3, esp32s3devkitc, esp32c6, esp32c5]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -42,3 +42,13 @@ jobs:
         run: pio run -e ${{ matrix.env }}
       - name: Flash budget
         run: python scripts/check_flash_budget.py ${{ matrix.env }}
+      - name: Upload 4-lane flash binaries
+        if: matrix.env == 'esp32dev_4lane'
+        uses: actions/upload-artifact@v4
+        with:
+          name: spoolsense-4lane-esp32dev
+          path: |
+            .pio/build/esp32dev_4lane/bootloader.bin
+            .pio/build/esp32dev_4lane/partitions.bin
+            .pio/build/esp32dev_4lane/firmware.bin
+          if-no-files-found: error
