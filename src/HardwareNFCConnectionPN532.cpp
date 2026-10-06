@@ -3,6 +3,9 @@
 #include "openprinttag_adafruit_pn532.h"
 #include "BoardPins.h"
 #include "SharedSPIBus.h"
+#ifdef SPOOLSENSE_4LANE_PN532
+#include "FourLanePN532Manager.h"
+#endif
 
 #include <Arduino.h>
 #include <SPI.h>
@@ -10,9 +13,19 @@
 // PN532 ISO14443A NFC reader (4-byte and 7-byte tags: NTAG, MIFARE). Adafruit_PN532 stores response
 // data in a file-scope global buffer; after readPassiveTargetID,
 // ATQA and SAK extracted from bytes 9-10 and 11 respectively.
+//
+// IMPORTANT FOR MULTI-READER BUILDS: pn532_packetbuffer is shared by every
+// Adafruit_PN532 instance. Reader operations therefore MUST remain serialized.
 extern byte pn532_packetbuffer[];
 
 HardwareNFCConnectionPN532::HardwareNFCConnectionPN532() {
+    memset(&hal_, 0, sizeof(hal_));
+    memset(currentUid_, 0, sizeof(currentUid_));
+}
+
+HardwareNFCConnectionPN532::HardwareNFCConnectionPN532(
+    uint8_t rst, uint8_t ss, uint8_t sck, uint8_t mosi, uint8_t miso)
+    : pinRst_(rst), pinSs_(ss), pinSck_(sck), pinMosi_(mosi), pinMiso_(miso), fixedPins_(true) {
     memset(&hal_, 0, sizeof(hal_));
     memset(currentUid_, 0, sizeof(currentUid_));
 }
@@ -22,9 +35,26 @@ HardwareNFCConnectionPN532::~HardwareNFCConnectionPN532() {
 }
 
 bool HardwareNFCConnectionPN532::begin() {
-    // Runtime pin overrides (#201): PN532 shares the NFC pin slots (SS=NSS; BUSY unused).
-    // BOARD_SHARED_SPI injects the same global bus used by the TFT.
-    {
+#ifdef SPOOLSENSE_4LANE_PN532
+    // In the dedicated four-lane build, the default PN532 object created by
+    // stock SpoolSense acts only as a bootstrap shim. It starts the real
+    // four-reader manager, then reports itself ready so the stock NFC task can
+    // idle without touching SPI. Fixed-pin instances are the actual lane
+    // readers and continue through the normal initialization path below.
+    if (!fixedPins_) {
+        Serial.println("PN532: four-lane bootstrap mode");
+        ready_ = FourLanePN532Manager::getInstance().begin();
+        if (ready_) {
+            FourLanePN532Manager::getInstance().startTask();
+        }
+        return ready_;
+    }
+#endif
+
+    // Runtime pin overrides (#201) remain the stock behavior. 4-lane builds
+    // can instead construct each PN532 with fixed pins so several readers can
+    // share SCK/MOSI/MISO while using independent chip-select lines.
+    if (!fixedPins_) {
         auto& cfg = ConfigurationManager::getInstance();
         pinRst_ = cfg.getNfcPin(NfcPinId::Rst);
         pinSs_  = cfg.getNfcPin(NfcPinId::Nss);
@@ -32,6 +62,12 @@ bool HardwareNFCConnectionPN532::begin() {
         pinMosi_ = cfg.getNfcPin(NfcPinId::Mosi);
         pinMiso_ = cfg.getNfcPin(NfcPinId::Miso);
     }
+
+    // Keep this reader deselected before touching the shared SPI bus. This is
+    // especially important when several PN532 boards are powered together.
+    pinMode(pinSs_, OUTPUT);
+    digitalWrite(pinSs_, HIGH);
+
 #if defined(BOARD_SHARED_SPI)
     if (!SharedSPIBus::begin(pinSck_, pinMiso_, pinMosi_, pinSs_, PIN_TFT_CS)) {
         Serial.println("PN532: shared SPI initialization failed");
@@ -39,7 +75,11 @@ bool HardwareNFCConnectionPN532::begin() {
     }
     SPIClass* spiBus = &SharedSPIBus::bus();
 #else
-    SPI.begin(pinSck_, pinMiso_, pinMosi_, pinSs_);
+    // The Adafruit PN532 object owns its CS pin, so the ESP32 SPI driver's
+    // optional default-SS argument is unnecessary. Omitting it also prevents
+    // the last initialized PN532 from becoming a global/default SS when four
+    // readers share this bus.
+    SPI.begin(pinSck_, pinMiso_, pinMosi_);
     SPIClass* spiBus = &SPI;
 #endif
 
@@ -60,7 +100,7 @@ bool HardwareNFCConnectionPN532::begin() {
     // Firmware read proves SPI communication is working; loss of response indicates hardware failure
     uint32_t versiondata = pn532_->getFirmwareVersion();
     if (!versiondata) {
-        Serial.println("PN532: No response — check wiring");
+        Serial.printf("PN532: No response on CS=%u — check wiring\n", pinSs_);
         delete pn532_;
         pn532_ = nullptr;
         return false;
@@ -69,12 +109,12 @@ bool HardwareNFCConnectionPN532::begin() {
     // getFirmwareVersion layout: IC (chip ID) in [24:31], FW major in [16:23], minor in [8:15]
     fwMajor_ = (versiondata >> 16) & 0xFF;
     fwMinor_ = (versiondata >> 8) & 0xFF;
-    Serial.printf("PN532: Found IC=0x%02X firmware v%d.%d\n",
-        (uint8_t)((versiondata >> 24) & 0xFF), fwMajor_, fwMinor_);
+    Serial.printf("PN532: Found IC=0x%02X firmware v%d.%d on CS=%u\n",
+        (uint8_t)((versiondata >> 24) & 0xFF), fwMajor_, fwMinor_, pinSs_);
 
     // SAMConfig activates Normal mode (bit 0) + enables AutoISO14443B; required before tag reads
     if (!pn532_->SAMConfig()) {
-        Serial.println("PN532: SAMConfig failed");
+        Serial.printf("PN532: SAMConfig failed on CS=%u\n", pinSs_);
         delete pn532_;
         pn532_ = nullptr;
         return false;
@@ -84,7 +124,7 @@ bool HardwareNFCConnectionPN532::begin() {
     hal_ = opt_create_adafruit_pn532_hal(pn532_);
 
     ready_ = true;
-    Serial.println("PN532: Initialized (ISO14443A only)");
+    Serial.printf("PN532: Initialized (ISO14443A only, CS=%u)\n", pinSs_);
     return true;
 }
 
@@ -104,13 +144,20 @@ void HardwareNFCConnectionPN532::reset() {
 }
 
 bool HardwareNFCConnectionPN532::hardwareReset() {
+#ifdef SPOOLSENSE_4LANE_PN532
+    // The bootstrap shim owns no physical PN532. Do not let the stock recovery
+    // path pulse the shared reset line underneath the four-lane scan task.
+    if (!fixedPins_ && pn532_ == nullptr) return ready_;
+#endif
+
     SharedSPIBus::Guard spiGuard;
     if (!spiGuard) {
         Serial.println("PN532: shared SPI lock timeout during hardware reset");
         return false;
     }
 
-    // Toggle RST pin for hardware reset: forces state machine reboot
+    // Toggle RST pin for hardware reset: forces state machine reboot. In the
+    // 4-lane wiring this pin may intentionally be shared, resetting all PN532s.
     pinMode(pinRst_, OUTPUT);
     digitalWrite(pinRst_, LOW);
     delay(10);
@@ -250,12 +297,17 @@ bool HardwareNFCConnectionPN532::writeISO14443Pages(
 }
 
 void HardwareNFCConnectionPN532::getReaderInfo(char* buf, size_t len) const {
-    if (buf && len > 0) {
-        if (!ready_) {
-            snprintf(buf, len, "PN532 (not initialized)");
-        } else {
-            snprintf(buf, len, "PN532 v%d.%d", fwMajor_, fwMinor_);  // cached at init
-        }
+    if (!buf || len == 0) return;
+#ifdef SPOOLSENSE_4LANE_PN532
+    if (!fixedPins_ && ready_) {
+        snprintf(buf, len, "PN532 4-lane");
+        return;
+    }
+#endif
+    if (!ready_) {
+        snprintf(buf, len, "PN532 (not initialized)");
+    } else {
+        snprintf(buf, len, "PN532 v%d.%d", fwMajor_, fwMinor_);  // cached at init
     }
 }
 
@@ -271,6 +323,20 @@ bool HardwareNFCConnectionPN532::getDiagnosticSnapshot(ReaderDiagnostics& out) {
 }
 
 void HardwareNFCConnectionPN532::logDiagnostics() {
+#ifdef SPOOLSENSE_4LANE_PN532
+    if (!fixedPins_ && ready_) {
+        Serial.println("PN532: four-lane manager active (virtual scanner bootstrap)");
+        for (uint8_t lane = 0; lane < FourLanePN532Manager::LANE_COUNT; ++lane) {
+            Serial.printf("  Lane %u: reader=%s tag=%s uid=%s\n",
+                          lane + 1,
+                          FourLanePN532Manager::getInstance().isLaneReady(lane) ? "READY" : "FAILED",
+                          FourLanePN532Manager::getInstance().isLanePresent(lane) ? "PRESENT" : "EMPTY",
+                          FourLanePN532Manager::getInstance().getLaneUid(lane));
+        }
+        return;
+    }
+#endif
+
     if (!pn532_ || !ready_) {
         Serial.println("PN532: Not initialized");
         return;
@@ -283,10 +349,10 @@ void HardwareNFCConnectionPN532::logDiagnostics() {
     // Re-read firmware version to verify SPI comms still working
     uint32_t ver = pn532_->getFirmwareVersion();
     if (ver) {
-        Serial.printf("PN532: IC=0x%02X FW=%d.%d\n",
-            (uint8_t)(ver >> 24), (uint8_t)(ver >> 16), (uint8_t)(ver >> 8));
+        Serial.printf("PN532: IC=0x%02X FW=%d.%d CS=%u\n",
+            (uint8_t)(ver >> 24), (uint8_t)(ver >> 16), (uint8_t)(ver >> 8), pinSs_);
     } else {
-        Serial.println("PN532: No response during diagnostics — SPI bus may be hung");
+        Serial.printf("PN532: No response during diagnostics on CS=%u — SPI bus may be hung\n", pinSs_);
     }
 }
 

@@ -272,6 +272,17 @@
   #define PIN_PN532_SS     PIN_PN5180_NSS
   #define PIN_PN532_IRQ    PIN_PN5180_IRQ
   #define PIN_PN532_RST    PIN_PN5180_RST
+
+  // Four-lane Box Turtle PN532 wiring. All readers share SCK/MOSI/MISO/RST;
+  // each reader gets a dedicated CS. GPIO 18 is borrowed from the optional
+  // keypad, so keypad mode and the four-lane build are intentionally mutually
+  // exclusive. GPIO 32/33 are otherwise PN5180-only signals and are free when
+  // PN532 is selected.
+  #define PIN_PN532_LANE1_SS  14
+  #define PIN_PN532_LANE2_SS  32
+  #define PIN_PN532_LANE3_SS  33
+  #define PIN_PN532_LANE4_SS  18
+
   // LCD I2C
   #define PIN_LCD_SDA      23
   #define PIN_LCD_SCL      22
